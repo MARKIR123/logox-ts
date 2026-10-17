@@ -157,10 +157,16 @@ function hasProgress(event: StreamEvent): boolean {
     (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning ||
       !!choice.delta.tool_calls?.some(call => !!call.id || !!call.function?.name || !!call.function?.arguments))) ?? false;
 }
-export function openaiMessages(messages: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false): ObjectValue[] {
-  return messages.map(message => {
+export function openaiMessages(messages: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
+  const imageIndices = messages
+    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
+    .filter(i => i >= 0);
+  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+
+  return messages.map((message, i) => {
+    const keepImage = activeImageIndices.has(i);
     if (message.role === 'tool') {
-      if (supportsVision && message.images?.length) {
+      if (supportsVision && message.images?.length && keepImage) {
         return {
           role: 'tool',
           tool_call_id: message.callId,
@@ -173,7 +179,7 @@ export function openaiMessages(messages: readonly ModelMessage[], requiresReason
       return {role: 'tool', tool_call_id: message.callId, content: message.text};
     }
     if (message.role === 'user') {
-      if (supportsVision && message.images?.length) {
+      if (supportsVision && message.images?.length && keepImage) {
         return {
           role: 'user',
           content: [
@@ -191,13 +197,20 @@ export function openaiMessages(messages: readonly ModelMessage[], requiresReason
       }))} : {})};
   });
 }
-export function anthropicMessages(messages: readonly ModelMessage[]): ObjectValue[] {
+export function anthropicMessages(messages: readonly ModelMessage[], maxImages = 2): ObjectValue[] {
+  const imageIndices = messages
+    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
+    .filter(i => i >= 0);
+  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+
   const result: {role: string; content: ObjectValue[]}[] = [];
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    const keepImage = activeImageIndices.has(i);
     const role = message.role === 'tool' ? 'user' : message.role;
     const content: ObjectValue[] = [];
     if (message.role === 'tool') {
-      if (message.images?.length) {
+      if (message.images?.length && keepImage) {
         const blocks: ObjectValue[] = [{type: 'text', text: message.text}];
         for (const img of message.images) {
           blocks.push({type: 'image', source: {type: 'base64', media_type: img.mimeType, data: img.data}});
@@ -215,7 +228,7 @@ export function anthropicMessages(messages: readonly ModelMessage[]): ObjectValu
         content.push({type: 'tool_use', id: call.id, name: call.name, input});
       }
     } else {
-      if (message.images?.length) {
+      if (message.images?.length && keepImage) {
         content.push({type: 'text', text: message.text});
         for (const img of message.images) {
           content.push({type: 'image', source: {type: 'base64', media_type: img.mimeType, data: img.data}});
@@ -294,7 +307,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         if (effort !== 'off') thinking.reasoning_effort = effort === 'auto' ? 'low' : effort;
       } else thinking.reasoning_effort = effort === 'off' ? 'none' : effort;
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
-    const supportsVision = request.supportsVision ?? (native || !settings.model.toLowerCase().includes('deepseek'));
+    const supportsVision = request.supportsVision ?? true;
     const isStream = request.stream !== false;
     const body = native
       ? {model: settings.model, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
@@ -374,10 +387,10 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               }
             }
           }
-          const finishReason = typeof first?.finish_reason === 'string' ? first.finish_reason : undefined;
-          stop = finishReason === 'tool_calls' || calls.size > 0 ? 'tools'
-            : finishReason === 'length' ? 'length'
-            : finishReason === 'stop' ? 'complete' : 'other';
+          const finishReason = typeof first?.finish_reason === 'string' ? first.finish_reason.toLowerCase() : undefined;
+          stop = (finishReason === 'tool_calls' || finishReason === 'function_call' || calls.size > 0) ? 'tools'
+            : (finishReason === 'length' || finishReason === 'max_tokens') ? 'length'
+            : ['stop', 'end_turn', 'stop_sequence', 'eos', 'done'].includes(finishReason ?? '') ? 'complete' : 'other';
           if (parsed.usage && typeof parsed.usage === 'object') {
             const u = parsed.usage as Record<string, number>;
             usage = {input: u.prompt_tokens ?? 0, output: u.completion_tokens ?? 0};
@@ -432,8 +445,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               if (item.function?.arguments) call.arguments += item.function.arguments;
               calls.set(item.index, call);
             }
-            if (choice?.finish_reason) stop = choice.finish_reason === 'tool_calls' ? 'tools'
-              : choice.finish_reason === 'length' ? 'length' : choice.finish_reason === 'stop' ? 'complete' : 'other';
+            if (choice?.finish_reason) {
+              const fr = choice.finish_reason.toLowerCase();
+              stop = (fr === 'tool_calls' || fr === 'function_call') ? 'tools'
+                : (fr === 'length' || fr === 'max_tokens') ? 'length'
+                : ['stop', 'end_turn', 'stop_sequence', 'eos', 'done'].includes(fr) ? 'complete' : 'other';
+            }
             if (event.usage) {
               const cached = event.usage.prompt_tokens_details?.cached_tokens ?? event.usage.prompt_cache_hit_tokens ?? event.usage.cached_tokens;
               usage = {input: event.usage.prompt_tokens ?? 0, output: event.usage.completion_tokens ?? 0, ...(cached !== undefined ? {cacheRead: cached} : {})};

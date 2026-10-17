@@ -121,7 +121,7 @@ application 提供可用提供商名称、当前提供商的已查询模型及�
 
 [CommandPane](../src/tui/command-pane.tsx) 统一细分隔线、左右留白、固定高度与底部提示；[Picker](../src/tui/picker.tsx) 和 [TabbedPage](../src/tui/tabbed-page.tsx) 共享这个容器。标题、说明、选项/页签、当前项、空状态和完成回调由调用方提供。继续使用 LOGOX 的绿色 accent 与 ❯，没有选中背景。
 
-/model 打开模型选择器，/provider 与 /providers 打开提供商选择器；/login 的提供商阶段也使用 Picker。选择器临时替换输入区，上方保留舞台。键入或粘贴筛选公开候选，Ctrl+U 清空筛选；↑↓、Home/End、PageUp/PageDown 导航，Enter 确认，Esc 取消。Ctrl+C 使用统一双击退出逻辑。模型右侧保留提供商名称，避免同名模型混淆。加载、空列表、部分查询失败和确认失败显示在当前界面；确认成功才应用选择。
+/model 打开模型选择器，/provider 与 /providers 打开提供商选择器；/login 的提供商阶段也使用 Picker。选择器临时替换输入区，上方保留舞台。键入或粘贴筛选公开候选，Ctrl+U 清空筛选；↑↓、Home/End、PageUp/PageDown 导航，Enter 确认，Esc 取消。Ctrl+C 使用统一双击退出逻辑。模型右侧保留提供商名称，避免同名模型混淆；同族带思考后缀变体（如 *-low, *-medium, *-high）自动折叠合并为基准名，模型列表下方空一行呈现思考强度滑轨（`✦ Thinking: [ ○───●───○ ] tier`），以滑轨位置与色彩区分模型强度（off 灰色、low 澄明冰翠绿、medium 深海蓝、high 暖陶橙、max 烟粉紫、auto 钛金黄），通过 ← → 左右方向键平移滑块调节当前档位，并联动模型条目 `✦ <tier>` 标识与真实模型映射。加载、空列表、部分查询失败和确认失败显示在当前界面；确认成功才应用选择。
 
 /status、/config、/help、/usage 打开同一个全屏页签页面，分别定位“状态”“配置”“命令”“用量”。←→、Tab/Shift+Tab 切换页签；↑↓、PageUp/PageDown、Home/End 浏览内容，各页签分别保留滚动位置。窄屏优先显示当前页签。配置页展示真实生效值，修改其他配置仍通过 config.toml 后重启。
 

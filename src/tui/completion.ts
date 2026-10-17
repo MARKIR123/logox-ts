@@ -24,18 +24,49 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
         start: 0, end, kind: 'command', execute: command.argument !== 'text'};
     });
   }
-  const argument = /^\/([a-z-]+)[ \t]+([^\s]*)$/i.exec(before);
-  if (!argument) return [];
-  const command = commandCatalog.find(item => item.name === argument[1]!.toLowerCase());
-  const candidates = command?.argument === 'provider' ? context.providers
-    : command?.argument === 'loginProvider' ? context.loginProviders
-      : command?.argument === 'model' ? context.models : [];
-  const prefix = argument[2]!, start = before.length - prefix.length;
+  const tokens = before.slice(1).split(/[ \t]+/);
+  const commandName = tokens[0]?.toLowerCase() ?? '';
+  const command = commandCatalog.find(item => item.name.toLowerCase() === commandName);
+  if (!command) return [];
+
+  const argIndex = tokens.length - 1;
+  const currentPrefix = tokens[argIndex] ?? '';
+  const start = before.length - currentPrefix.length;
   const suffix = /^[^\s]*/.exec(draft.text.slice(before.length))?.[0] ?? '';
-  return [...new Set(candidates)].filter(name => name.toLowerCase().startsWith(prefix.toLowerCase())).map(name => ({
-    label: name, description: command?.argument === 'model' ? '模型' : '提供商', replacement: name,
-    start, end: before.length + suffix.length, kind: 'argument', execute: false,
-  }));
+  const end = before.length + suffix.length;
+
+  if (command.name === 'model') {
+    if (argIndex === 1) {
+      const actorList = (context.actors ?? ['logox', 'techne', 'kalon', 'aletheia']).map(a => ({
+        name: a,
+        description: 'Actor role',
+      }));
+      return actorList
+        .filter(item => item.name.toLowerCase().startsWith(currentPrefix.toLowerCase()))
+        .map(item => ({
+          label: item.name,
+          description: item.description,
+          replacement: item.name,
+          start,
+          end,
+          kind: 'argument' as const,
+          execute: true,
+        }));
+    }
+    return [];
+  }
+
+  if (argIndex === 1) {
+    const candidates = command.argument === 'provider' ? context.providers
+      : command.argument === 'loginProvider' ? context.loginProviders
+        : [];
+    return [...new Set(candidates)].filter(name => name.toLowerCase().startsWith(currentPrefix.toLowerCase())).map(name => ({
+      label: name, description: command.argument === 'provider' ? '提供商' : '登录接口', replacement: name,
+      start, end, kind: 'argument', execute: false,
+    }));
+  }
+
+  return [];
 }
 
 export function applyCommandSuggestion(draft: Draft, suggestion: CommandSuggestion): Draft {

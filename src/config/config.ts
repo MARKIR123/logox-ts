@@ -55,12 +55,12 @@ const schema = z.object({
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
     temperature: z.number().min(0).max(2).default(0.2),
     max_tokens: z.number().int().positive().default(16384),
-    timeout: z.number().positive().default(120),
-  }).default({thinking_effort: 'auto', name: 'openai-compatible', model: '', temperature: 0.2, max_tokens: 16384, timeout: 120}),
+    timeout: z.number().positive().default(600),
+  }).default({thinking_effort: 'auto', name: 'openai-compatible', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
   kernel: z.object({
-    max_iterations: z.number().int().positive().default(50),
+    max_iterations: z.number().int().nonnegative().default(0),
     max_retries: z.number().int().nonnegative().max(10).default(3),
-  }).default({max_iterations: 50, max_retries: 3}),
+  }).default({max_iterations: 0, max_retries: 3}),
   providers: z.record(z.string(), z.object({
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
@@ -78,8 +78,7 @@ export interface ModelSettings {
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
   'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
-  ollama: {kind: 'openai_compat', base_url: 'http://127.0.0.1:11434/v1'},
-  'lm-studio': {kind: 'openai_compat', base_url: 'http://127.0.0.1:1234/v1'},
+  antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1'},
   anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY'},
 };
 function pathKey(path: string): string {return process.platform === 'win32' ? path.toLowerCase() : path;}
@@ -171,7 +170,9 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   const official = baseUrl.replace(/\/$/, '') === presets[provider.name]?.base_url.replace(/\/$/, '');
   const protocol = declared?.thinking_protocol ?? (official && provider.name === 'deepseek' && ['deepseek-flash', 'deepseek-v4-pro'].includes(model) ? 'deepseek'
     : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6)$/.test(model) ? 'anthropic-adaptive'
-    : official && provider.name === 'anthropic' && /^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?)(?:-\d{8})?$/.test(model) ? 'anthropic-budget' : undefined);
+    : official && provider.name === 'anthropic' && /^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?)(?:-\d{8})?$/.test(model) ? 'anthropic-budget'
+    : (provider.name === 'antigravity' || url.port === '8045') && (model.toLowerCase().includes('gemini') || model.toLowerCase().includes('claude')) ? 'reasoning-effort'
+    : undefined);
   const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
   return {kind, baseUrl,

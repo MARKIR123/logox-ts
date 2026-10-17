@@ -6,6 +6,7 @@ import {immutable} from '../runtime/contracts.js';
 import {ActorCatalog, assertActorPath} from './catalog.js';
 import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './definitions.js';
 import type {ContextPolicy} from '../config/config.js';
+import {detectEffortLevels} from '../config/model-grouping.js';
 
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
 export interface CraftResult {readonly status: 'saved' | 'denied'; readonly path: string; readonly revision: number}
@@ -13,14 +14,17 @@ export class ActorManagement {
   constructor(readonly catalog: ActorCatalog, private readonly registry: Pick<ProviderRegistry, 'modelCatalog'>,
     private readonly requireIdle: () => void = () => {}, private readonly policy?: (ownerId: string) => ContextPolicy) {}
   tab(): CommandTab {
-    return immutable({id: 'actors', title: '剧团', lines: this.catalog.list().flatMap(actor => {
+    return immutable({id: 'actors', title: 'Ensemble', lines: this.catalog.list().flatMap(actor => {
       const policy = this.policy?.(actor.id) ?? actor.context;
       return [
-        actor.symbol + ' ' + actor.name + ' · ' + actor.title, actor.description,
-        '默认模型：' + (actor.defaultModel ? actor.defaultModel.provider + ' / ' + actor.defaultModel.model : '继承当前会话模型'),
-        '旧轮 / 工具保留：' + policy.keep_recent_rounds + ' / ' + policy.keep_recent_tools,
-        '压缩参数：' + JSON.stringify(policy), '技能：' + (actor.skills.join('、') || '按技能声明分配'),
-        '人设：' + actor.prompt, '摘要契约：' + actor.compression, '',
+        '── ' + actor.symbol + ' ' + actor.name + ' (' + actor.title + ') ' + '─'.repeat(30),
+        'Description: ' + actor.description,
+        'Designated model: ' + (actor.defaultModel ? actor.defaultModel.provider + '/' + actor.defaultModel.model : 'Inherits session model (switch via /model ' + actor.id + ')'),
+        'Context retention: ' + policy.keep_recent_rounds + ' rounds / ' + policy.keep_recent_tools + ' tools',
+        'Context policy: ' + JSON.stringify(policy),
+        'Skills: ' + (actor.skills.join(', ') || 'Declared on-demand'),
+        'Persona prompt: ' + actor.prompt.slice(0, 150).replace(/\n/g, ' ') + '...',
+        '',
       ];
     })});
   }
@@ -51,7 +55,20 @@ export class ActorManagement {
       current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit'}, async signal => {
       const result = await this.registry.modelCatalog(signal);
       for (const item of result.models) choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-      return {items: [...choices].map(([id, model]) => ({id, label: model ? model.provider + ' / ' + model.model : '继承当前会话模型'})), warning: result.issues.join('；')};
+      const items = [
+        {id: 'inherit', label: '继承当前会话模型'},
+        ...result.models.map(item => {
+          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
+          const levels = detectEffortLevels(item.id, item.provider);
+          return {
+            id: choiceId,
+            label: item.provider + ' / ' + item.id,
+            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
+            effortLevels: levels.length > 1 ? levels : undefined,
+          };
+        }),
+      ];
+      return {items, warning: result.issues.join('；')};
     }, async choice => {
       if (!choices.has(choice)) throw new Error('模型选项无效');
       await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);

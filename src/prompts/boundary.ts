@@ -7,6 +7,7 @@
 
 import {summaryInstruction} from '../context/contracts.js';
 import {CORE_EXECUTION_CHARTER, TOOL_USAGE_RULES, NO_VISION_NOTE} from './charter.js';
+import {getScratchpadPromptSection} from '../kernel/scratchpad.js';
 
 export const PROMPT_CACHE_BOUNDARY = '<!-- __LOGOX_PROMPT_CACHE_BOUNDARY__ -->';
 
@@ -26,6 +27,7 @@ export interface ComposeSystemPromptOptions {
   supportsVision?: boolean | undefined;
   progressInstruction?: string | undefined;
   recoveryInstruction?: string | undefined;
+  scratchpadDir?: string | undefined;
 }
 
 /**
@@ -39,8 +41,9 @@ export function composeBaseSystemPrompt(options: {
   customPrompt?: string | undefined;
   rulesContext?: string | undefined;
   includeSummary?: boolean | undefined;
+  scratchpadDir?: string | undefined;
 }): {system: string; sections: PromptSection[]} {
-  const {cwd, ownerId, builtinPrompt, customPrompt, rulesContext, includeSummary = true} = options;
+  const {cwd, ownerId, builtinPrompt, customPrompt, rulesContext, includeSummary = true, scratchpadDir} = options;
 
   let resolvedPrompt = '';
   if (customPrompt) {
@@ -64,6 +67,10 @@ export function composeBaseSystemPrompt(options: {
     {name: 'execution_charter', text: CORE_EXECUTION_CHARTER},
   ];
 
+  if (scratchpadDir) {
+    sections.push({name: 'scratchpad', text: getScratchpadPromptSection(scratchpadDir), dynamic: true});
+  }
+
   if (rulesContext) {
     sections.push({name: 'rules_context', text: rulesContext, dynamic: true});
   }
@@ -76,7 +83,9 @@ export function composeBaseSystemPrompt(options: {
   const system = resolvedPrompt + '\n工作目录：' + cwd +
     '\n' + TOOL_USAGE_RULES +
     '\n' + CORE_EXECUTION_CHARTER +
+    (scratchpadDir ? '\n' + getScratchpadPromptSection(scratchpadDir) : '') +
     (rulesContext ? '\n' + rulesContext : '') +
+    (includeSummary ? summaryInstruction : '');
     (includeSummary ? summaryInstruction : '');
 
   return {system, sections};
@@ -102,7 +111,7 @@ export function composeRuntimeSystemPrompt(options: {
   }
 
   if (options.recoveryInstruction) {
-    parts.push('恢复提示：' + options.recoveryInstruction);
+    parts.push('Recovery notice: ' + options.recoveryInstruction);
   }
 
   return parts.join('\n');

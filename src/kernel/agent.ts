@@ -5,9 +5,9 @@ import {Resources, type SkillVisibility} from '../resources/manager.js';
 import type {ActorExecutor} from '../actors/ensemble.js';
 import {builtinActors} from '../actors/builtins.js';
 import type {RuntimeStore} from '../runtime/store.js';
-import {normalizeMessages, type ModelMessage, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
+import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
-import {Tools, toolDefinitions, validToolCall, type ToolResult} from '../tools/tools.js';
+import {Tools, toolDefinitions, validToolCall, validateToolCall, type ToolResult} from '../tools/tools.js';
 
 import type {ContextManager} from '../context/manager.js';
 import {inputKind, inputMessage} from '../runtime/provenance.js';
@@ -18,6 +18,7 @@ import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFingerprint, type ExecutionRecoveryKind} from './execution-recovery.js';
 import {composeBaseSystemPrompt, composeRuntimeSystemPrompt} from '../prompts/index.js';
+import {maybePersistLargeOutput} from './scratchpad.js';
 
 export class UserCancelledError extends Error {
   readonly stopReason = 'user' as const;
@@ -41,7 +42,7 @@ export interface AgentOptions {
   executionProgress?(context: Parameters<ActorExecutor<string>>[1], fingerprint: string): Promise<boolean>;
   executionNotice?(context: Parameters<ActorExecutor<string>>[1], text: string): void;
   readonlyConcurrency?: number;
-  supportsVision?: boolean;
+  supportsVision?: boolean | (() => boolean);
   context?: ContextManager;
   resources?: Resources;
   extraTools?: readonly ToolDefinition[];
@@ -50,7 +51,7 @@ export interface AgentOptions {
   executeExtra?(call: ToolCall, context: Parameters<ActorExecutor<string>>[1]): Promise<ToolResult>;
 }
 export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly ToolDefinition[] = [], resources?: Resources,
-  role?: {prompt: string; visibility: SkillVisibility}, includeSummary = true) {
+  role?: {prompt: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string) {
   const effective = resources ?? new Resources(cwd);
   if (!resources) await effective.reload();
   const rules = effective.prompt(role?.visibility);
@@ -62,6 +63,7 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     customPrompt: role?.prompt,
     rulesContext: rules.context,
     includeSummary,
+    scratchpadDir,
   });
   return {system, tools: [...toolDefinitions, taskProgressTool, ...(role || ownerId === 'logox' ? extraTools : [])]};
 }
@@ -112,10 +114,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
         if (options.requestBase) instruction = await options.requestBase(context);
-        if (iteration >= options.iterations) {
-          const outcome = await context.ask({kind: 'question', title: '继续这轮任务？', questions: [{
-            id: 'continue', header: '执行轮数', question: '已达到 ' + options.iterations + ' 次模型往返。是否继续？',
-            options: [{id: 'yes', label: '继续', description: '增加同样数量的往返额度。'}, {id: 'no', label: '停止', description: '保留当前结果，结束这轮任务。'}],
+        if (options.iterations > 0 && iteration >= options.iterations) {
+          const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
+            id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
+            options: [{id: 'yes', label: 'Continue', description: 'Add another budget quota of round trips.'}, {id: 'no', label: 'Stop', description: 'Keep current results and end task.'}],
           }]});
           if (outcome.status !== 'answered' || outcome.response.kind !== 'question' ||
             outcome.response.answers.continue?.type !== 'option' || outcome.response.answers.continue.optionId !== 'yes') {
@@ -125,9 +127,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         }
         const definitions = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? instruction.tools :
           [...instruction.tools.filter(tool => tool.name !== taskProgressTool.name), taskProgressTool];
+        const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const baseSystem = composeRuntimeSystemPrompt({
           baseSystem: instruction.system,
-          supportsVision: options.supportsVision,
+          supportsVision: visionEnabled,
           progressInstruction: progress.instruction(),
           recoveryInstruction: recovery,
         });
@@ -140,9 +143,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         }
         const projected = prepared?.request ?? {...base, messages: normalizeMessages(messages)};
         // 签名只属于生成它的模型；保留完整账本与工具配对，转用请求不回放旧签名思考。
-        let request = foreignSignatures.size ? {...projected, messages: projected.messages.map(message =>
+        let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
-            ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : projected;
+            ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled};
         iteration++;
         context.report(recoveringKind ? recoveringKind === 'no_delivery' ? '调整中' : '接续中' : '模型处理中',
           recoveringKind ? recovery : '第 ' + iteration + ' 次往返');
@@ -166,8 +169,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               }
               options.store.appendMessage(id, delta.text);
             }, context.signal);
+            options.store.flush();
             break;
           } catch (error) {
+            options.store.flush();
             const interruption = isProviderInterruption(error);
             const retry = !context.signal.aborted && error instanceof ProviderError && error.retryable && attempt < options.retries &&
               (interruption ? await (options.retryProvider?.(context, error) ?? Promise.resolve(attempt < 2)) : !emitted);
@@ -179,16 +184,16 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               // 失败尝试只留作历史阅读。重试复用原请求，不拼接半段回复或执行半截工具参数。
               if (emitted) await context.record({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), contextExcluded: true}, step);
               thinkingId = steps.thinking(); textId = undefined; emitted = false;
-              context.report('等待网络重试', '连接中断，已切换为非流式可靠重试；已完成工具结果保留。');
-              const resume = steps.wait(thinkingId, '等待网络重试');
+              context.report('Network retry', 'Connection interrupted; retrying with non-streaming fallback...');
+              const resume = steps.wait(thinkingId, 'Waiting for retry');
               try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: context.signal});} finally {resume();}
               // 对齐 Claude Code：流式长连接被代理或中间网关重置后，重试自动降级为非流式请求，彻底规避长流超时
               request = {...request, stream: false};
               continue;
             }
             if (retry) {
-              context.report('等待重试', '连接暂时失败，第 ' + (attempt + 1) + ' 次重试');
-              const resume = steps.wait(thinkingId, '等待重试');
+              context.report('Network retry', 'Temporary connection failure; retrying (' + (attempt + 1) + ')...');
+              const resume = steps.wait(thinkingId, 'Waiting for retry');
               try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: context.signal});} finally {resume();}
               continue;
             }
@@ -237,12 +242,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 if (extra) {
                   const check = z.fromJSONSchema(extra.parameters).safeParse(args);
                   if (!check.success) {
-                    schemaError = {callId: call.id, name: call.name, error: check.error.issues.map(i => `${i.path.join('.') || '参数'}: ${i.message}`).join('; ')};
+                    schemaError = {callId: call.id, name: call.name, error: check.error.issues.map(i => `${i.path.join('.') || '参数'}: ${i.message}`).join('; ') + ' (参数校验失败)'};
                     break;
                   }
-                } else if (!validToolCall(call)) {
-                  schemaError = {callId: call.id, name: call.name, error: '参数不符合规范'};
-                  break;
+                } else {
+                  const check = validateToolCall(call);
+                  if (!check.valid) {
+                    schemaError = {callId: call.id, name: call.name, error: check.error};
+                    break;
+                  }
                 }
               } catch (e) {
                 schemaError = {callId: call.id, name: call.name, error: e instanceof Error ? e.message : String(e)};
@@ -315,10 +323,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 for (let index = 0; index < group.length; index++) {
                   const call = group[index]!, settled = results[index]!;
                   const result: ToolResult = settled.status === 'fulfilled' ? settled.value : {text: context.signal.aborted ? '工具已取消。' : String(settled.reason), isError: true};
+                  const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId);
                   const step = steps.get(toolIds.get(call.id)!);
                   const toolMessage: ModelMessage = {
                     role: 'tool', callId: call.id, name: call.name,
-                    text: result.text, isError: result.isError,
+                    text: persistedText, isError: result.isError,
                     ...(result.images ? {images: [...result.images]} : {}),
                   };
                   await persist(toolMessage, step);

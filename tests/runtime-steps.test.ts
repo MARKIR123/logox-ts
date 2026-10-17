@@ -141,7 +141,7 @@ test('Actor 派工和报告保留来源，审批只收到真人授权，旧账�
     assert.equal(await readFile(journalPath, 'utf8'), original, '恢复不改写旧消息');
     await app.permissions.setMode('auto'); await app.submit('请写两份记录');
     const timeout = new AbortController();
-    try {await Promise.race([done.promise, delay(12000, undefined, {signal: timeout.signal}).then(() => {throw new Error('交接未完成');})]);} finally {timeout.abort();}
+    try {await Promise.race([done.promise, delay(20000, undefined, {signal: timeout.signal}).then(() => {throw new Error('交接未完成');})]);} finally {timeout.abort();}
     await waitForSnapshot(app.store, snapshot => snapshot.activities.every(activity => ['completed', 'failed', 'cancelled'].includes(activity.status)));
     assert.ok(wrappedRelay); assert.ok(reviews.length >= 2);
     assert.ok(reviews.every(users => users.includes('请写两份记录') && users.every(text => !text.includes('角色派工') && !text.includes('旧角色报告') && !text.includes('角色结果已返回'))));

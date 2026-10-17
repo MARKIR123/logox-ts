@@ -105,11 +105,11 @@ export class ActorServices {
         for (const task of tasks) {
           if (task.goal || task.minDeliverable || task.stopCondition || task.constraints?.length) {
             const parts: string[] = [];
-            if (task.goal) parts.push('【用户目标】\n' + task.goal);
-            if (task.constraints?.length) parts.push('【已确认硬约束】\n' + task.constraints.join('；'));
-            if (task.minDeliverable) parts.push('【本轮最小成果】\n' + task.minDeliverable + '（先交可运行初版，不在脑内一次完成）');
-            if (task.stopCondition) parts.push('【收尾条件】\n' + task.stopCondition + '（证据足够时立即交回成果与限制，禁止无边界深入研究）');
-            parts.push('【任务要求】\n' + task.prompt);
+            if (task.goal) parts.push('【User Goal / 用户目标】\n' + task.goal);
+            if (task.constraints?.length) parts.push('【Confirmed Constraints / 硬约束】\n' + task.constraints.join('; '));
+            if (task.minDeliverable) parts.push('【Minimum Deliverable / 本轮最小成果】\n' + task.minDeliverable + '\n(Deliver a runnable/usable version in the text channel; do not perform work entirely in thinking blocks)');
+            if (task.stopCondition) parts.push('【Completion Criteria / 收尾条件】\n' + task.stopCondition + '\n(Return deliverables and findings once sufficient evidence is gathered; avoid unbounded exploration)');
+            parts.push('【Task Instructions / 任务要求】\n' + task.prompt);
             task.prompt = parts.join('\n\n');
           }
           if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('角色无效：' + task.ownerId);
@@ -185,8 +185,19 @@ export class ActorServices {
         const {ownerId, activityId} = historySchema.parse(input);
         const entries = await this.options.journal.load(context.sessionId, ownerId);
         const rounds = await this.options.journal.rounds(context.sessionId, ownerId, entries);
-        return {text: JSON.stringify({rounds: rounds.filter(round => !activityId || round.activityId === activityId).slice(-6),
-          workflow: entries.filter(entry => !activityId || entry.activityId === activityId).slice(-20)}).slice(0, 16000), isError: false};
+        const relevantRounds = rounds.filter(round => !activityId || round.activityId === activityId).slice(-4);
+        const relevantEntries = entries.filter(entry => !activityId || entry.activityId === activityId);
+        const finalAssistant = relevantEntries.findLast(entry => entry.role === 'assistant' && entry.text.trim());
+        const toolsCalled = [...new Set(relevantEntries.flatMap(e => (e.message && e.message.role === 'assistant' ? e.message.toolCalls?.map(c => c.name) ?? [] : [])))];
+
+        const summaryText = relevantRounds.map(r => `[Round ${r.activityId}]: ${r.summary.title}\n${r.summary.report}`).join('\n\n');
+        const report = [
+          `# Subagent Report: ${ownerId}`,
+          summaryText ? summaryText : (finalAssistant?.text ? `Final Output:\n${finalAssistant.text}` : 'No text response recorded.'),
+          toolsCalled.length ? `Tools executed: ${toolsCalled.join(', ')}` : '',
+        ].filter(Boolean).join('\n\n');
+
+        return {text: report.slice(0, 4000), isError: false};
       }
       if (call.name === 'borrow_skill') {
         const {name} = borrowSchema.parse(input);

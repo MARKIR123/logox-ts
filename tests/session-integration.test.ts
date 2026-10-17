@@ -59,7 +59,7 @@ test('实际应用切换保持模型档位；每会话/角色用量独立恢复�
     assert.deepEqual(f.app.contexts.meter(identities('techne')).usageRecords(), actor);
     await f.app.submit('/new');
     assert.deepEqual(f.app.contexts.meter(identities('logox')).usageRecords(), []);
-    const selected = await page(f.app, '/config'); assert.match(selected, /模型：second/); assert.match(selected, /思考档位：high/);
+    const selected = await page(f.app, '/config'); assert.match(selected, /(?:模型：|Model: )second/); assert.match(selected, /(?:思考档位：|Thinking effort: )high/);
     await f.app.submit('/resume first'); await rewind(f.app);
     assert.deepEqual(f.app.contexts.meter(identities('logox')).usageRecords(), expected);
     assert.deepEqual(f.app.contexts.meter(identities('techne')).usageRecords(), actor);
@@ -85,7 +85,7 @@ test('候选失败保留规则；成功切换和回退清会话许可，项目�
     for (const [path, command] of [[join(f.cwd, '.logox', 'permissions.json'), '/permissions add project deny edit *.txt'],
       [join(f.cwd, '.logox', 'state', 'model-preferences.json'), '/model second']] as const) {
       const release = await acquireFileLock(path), saving = f.app.submit(command);
-      try {await assert.rejects(f.app.submit('/new'), /保存/); await assert.rejects(f.app.submit('/resume first'), /保存/);}
+      try {await assert.rejects(f.app.submit('/new'), /保存|saving/i); await assert.rejects(f.app.submit('/resume first'), /保存|saving/i);}
       finally {await release(); await saving;}
     }
   } finally {await f.cleanup();}
@@ -127,7 +127,7 @@ test('MCP长驻进程跨new/resume/rewind复用，Tools观察不重复；reload�
     const loading = app.submit('/reload');
     try {
       await Promise.race([started, loading.then(() => {throw new Error('没有进入受控资源重载');})]);
-      await assert.rejects(app.submit('/new'), /重载/);
+      await assert.rejects(app.submit('/new'), /重载|reloading/i);
     } finally {finish?.(); await loading;}
     await app.close(); assert.equal(extensions.mcp.status()[0]?.state, 'closed');
     assert.throws(() => process.kill(events.find(event => event.pid)!.pid!, 0));

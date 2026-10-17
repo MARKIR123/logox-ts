@@ -11,7 +11,12 @@ export function estimateText(text: string): number {
 }
 export function estimateRequest(request: ModelRequest): number {
   return estimateText(request.system) + estimateText(JSON.stringify(request.tools)) + 16 +
-    request.messages.reduce((sum, message) => sum + estimateText(JSON.stringify(message)) + 8, 0);
+    request.messages.reduce((sum, message) => {
+      const hasImages = 'images' in message && !!message.images?.length;
+      const imageTokens = hasImages ? (message.images?.length ?? 0) * 1200 : 0;
+      const textOnly = hasImages ? {...message, images: undefined} : message;
+      return sum + estimateText(JSON.stringify(textOnly)) + imageTokens + 8;
+    }, 0);
 }
 export interface BudgetPolicy {
   reserve_tokens: number; low_watermark_ratio: number;

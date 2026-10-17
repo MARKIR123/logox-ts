@@ -216,14 +216,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     if (actor && activity && !seen.has(activity.activityId)) {
       seen.add(activity.activityId);
-      const actorColor = ownerColor(activity.ownerId, roles);
-      appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles, task: activityTitle(activity),
-        active: animated(activity),
-        status: activityStatus(activity), open: open(activity.activityId), railColor: actorColor,
-        ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: activeStop(activity.activityId)} : {}),
-        renderBody(frame) {actorDetails(activity, frame); if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
-          if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);},
-      });
+      if (view !== 'logox' && activity.status === 'completed') {
+        // 在 actor 自己的对话窗口中，已完成的任务不重复渲染自引用的外层 Actor 卡片，直接呈现对话正文。
+      } else {
+        const actorColor = ownerColor(activity.ownerId, roles);
+        appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles, task: activityTitle(activity),
+          active: animated(activity),
+          status: activityStatus(activity), open: open(activity.activityId), railColor: actorColor,
+          ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: activeStop(activity.activityId)} : {}),
+          renderBody(frame) {actorDetails(activity, frame); if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
+            if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);},
+        });
+      }
     }
     if (actor && activity && view !== 'logox' && message.role === 'system' && ['failed', 'cancelled'].includes(activity.status)) continue;
     if (message.role === 'user') {

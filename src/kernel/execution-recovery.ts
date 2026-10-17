@@ -17,12 +17,12 @@ export class ExecutionRecoveryError extends Error {
 export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerId: string, adjustment = false): string {
   const next = kind === 'no_delivery'
     ? adjustment && ownerId === 'logox'
-      ? '改变下一步行动方案：缩小当前阶段，或把明确的小步交给合适 Actor；先交付具体成果或完整工具调用。'
-      : '上一请求只有思考或空回复。缩小当前阶段，只做最小可交付步骤，先提交成果或完整工具调用。'
+      ? 'Pivot action plan (改变下一步行动方案): Narrow current phase or delegate explicit smaller steps to a suitable actor. Deliver concrete artifacts or complete tool calls first.'
+      : 'Previous turn returned only thinking or an empty response (output quota exhausted before tools were called). Narrow to the minimum deliverable step (最小可交付步骤), avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
     : kind === 'truncated_tools'
-      ? '上一请求的工具参数被截断，整批调用未执行。提交更小、完整的调用，不重放已成功的工具。'
-      : '上一请求输出已满。沿已有正文从断点完成当前小步；不要重复规划、回顾或重新生成已交付内容。';
-  return next + '沿用已确认目标、当前阶段和已完成工具结果；不绕过审批拒绝，不提高输出额度或改变模型与思考档位。';
+      ? 'Previous tool arguments were truncated; the entire batch was not executed (整批调用未执行). Issue smaller, complete tool calls without replaying completed tools.'
+      : 'Previous output reached token limits. Continue the current step from the break point using existing text (沿已有正文从断点完成当前小步); do not replan or regenerate delivered content.';
+  return next + ' Adhere to confirmed goals, active stage, and completed tool results. Do not bypass approval denials or change model effort tiers.';
 }
 
 const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress',

@@ -7,6 +7,8 @@ export class RuntimeStore {
   private readonly listeners = new Set<() => void>();
   private readonly messages: Message[] = [];
   private snapshot: RuntimeSnapshot = immutable({revision: 0, activities: [], interactions: [], messages: []});
+  private publishTimer: ReturnType<typeof setTimeout> | undefined;
+
   readonly activities = new Activities(() => this.publish());
   readonly interactions = new Interactions(() => this.publish());
   readonly getSnapshot = (): RuntimeSnapshot => this.snapshot;
@@ -14,6 +16,15 @@ export class RuntimeStore {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
+
+  flush(): void {
+    if (this.publishTimer) {
+      clearTimeout(this.publishTimer);
+      this.publishTimer = undefined;
+      for (const listener of this.listeners) listener();
+    }
+  }
+
   message(sessionId: string, ownerId: string, role: Message['role'], text: string, origin: Pick<Message, 'activityId' | 'source' | 'kind' | 'time' | 'inputKind' | 'step'> = {}): string {
     const id = randomUUID();
     this.messages.push(immutable({id, sessionId, ownerId, role, text, time: Date.now(), ...origin}));
@@ -31,14 +42,26 @@ export class RuntimeStore {
   appendMessage(id: string, text: string): void {
     const index = this.messages.findIndex(message => message.id === id);
     const message = this.messages[index];
-    if (!message) throw new Error('消息不存在');
+    if (!message) throw new Error('Message not found: ' + id);
     this.messages[index] = immutable({...message, text: message.text + text});
-    this.publish();
+    this.snapshot = immutable({
+      revision: this.snapshot.revision + 1,
+      activities: [...this.activities.list()],
+      interactions: [...this.interactions.list()],
+      messages: [...this.messages],
+    });
+    if (!this.publishTimer) {
+      this.publishTimer = setTimeout(() => {
+        this.publishTimer = undefined;
+        for (const listener of this.listeners) listener();
+      }, 40);
+      this.publishTimer.unref?.();
+    }
   }
   updateMessage(id: string, patch: Partial<Pick<Message, 'text' | 'step'>>): void {
     const index = this.messages.findIndex(message => message.id === id);
     const message = this.messages[index];
-    if (!message) throw new Error('消息不存在');
+    if (!message) throw new Error('Message not found: ' + id);
     this.messages[index] = immutable({...message, ...patch}); this.publish();
   }
   clearTimeline(sessionId: string): void {
@@ -47,6 +70,7 @@ export class RuntimeStore {
     this.publish();
   }
   private publish(): void {
+    this.flush();
     this.snapshot = immutable({
       revision: this.snapshot.revision + 1,
       activities: [...this.activities.list()],

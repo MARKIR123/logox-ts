@@ -72,11 +72,11 @@ test('认证缺失、损坏、OAuth 和命令值明确失败，不泄漏文件�
 test('切换提供商清除旧模型地址和认证，失败选择不影响当前提供商', async () => {
   const f = await registryFixture();
   try {
-    f.registry.select('ollama');
-    assert.deepEqual(f.registry.selection(), {provider: 'ollama', model: '', kind: 'openai_compat', baseUrl: 'http://127.0.0.1:11434/v1'});
+    f.registry.select('antigravity');
+    assert.deepEqual(f.registry.selection(), {provider: 'antigravity', model: '', kind: 'openai_compat', baseUrl: 'http://127.0.0.1:8045/v1'});
     assert.equal((await f.registry.settings()).key, '');
     assert.throws(() => f.registry.select('unknown'), /未知/);
-    assert.equal(f.registry.selection().provider, 'ollama');
+    assert.equal(f.registry.selection().provider, 'antigravity');
     f.registry.select('cloud');
     assert.equal(f.registry.selection().model, 'fixture');
     f.registry.select('cloud', 'another');
@@ -248,4 +248,33 @@ test('Anthropic 思考增量和协议进展也刷新无进展期限', {timeout: 
     assert.equal(turn.message.reasoning, '想'.repeat(12)); assert.equal(turn.stop, 'complete');
     assert.deepEqual(turn.usage, {input: 1, output: 12});
   } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
+});
+
+test('内置 antigravity 预设走本地 8045 端口与 openai_compat 协议，无需 API Key，自动推导 100 万 Token 窗口与思考协议', async () => {
+  const f = await registryFixture();
+  try {
+    f.registry.select('antigravity', 'gemini-3.8-flash');
+    assert.deepEqual(f.registry.selection(), {
+      provider: 'antigravity',
+      model: 'gemini-3.8-flash',
+      kind: 'openai_compat',
+      baseUrl: 'http://127.0.0.1:8045/v1',
+    });
+    // 无需密钥
+    const settings = await f.registry.settings();
+    assert.equal(settings.key, '');
+    assert.equal(settings.thinkingProtocol, 'reasoning-effort');
+
+    // 自动推导容量：Gemini 模型 1,000,000 上下文，64,000 最大输出
+    const geminiCapacity = f.registry.capacity('antigravity', 'gemini-3.8-flash');
+    assert.equal(geminiCapacity.window, 1_000_000);
+    assert.equal(geminiCapacity.maxOutput, 64_000);
+
+    // Claude 模型经 antigravity 走 openai_compat，推导 1,000,000 上下文，128,000 最大输出
+    const claudeCapacity = f.registry.capacity('antigravity', 'claude-sonnet-4-6');
+    assert.equal(claudeCapacity.window, 1_000_000);
+    assert.equal(claudeCapacity.maxOutput, 128_000);
+  } finally {
+    await f.cleanup();
+  }
 });

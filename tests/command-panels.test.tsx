@@ -41,7 +41,7 @@ test('实际 Ink picker：搜索、跳过禁用、翻页、取消；页签保留
     await key('\x1b[B'); assert.match(frame(output), /❯ model-2/);
     await key('\x1b[6~'); assert.match(frame(output), /❯ model-8/);
     await key('\x1b[4~'); assert.match(frame(output), /❯ 中文🙂模型/);
-    await key('不存在'); assert.match(frame(output), /没有匹配的选项/);
+    await key('不存在'); assert.match(frame(output), /(?:没有匹配的选项|No matching options)/);
     await key('\r'); assert.deepEqual(chosen, []);
     await key('\x15'); await key('中文🙂'); await key('\r'); assert.deepEqual(chosen, ['15']);
     assert.match(frame(output), /保留我的草稿/);
@@ -102,13 +102,13 @@ test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 
   };
   try {
     await openModels();
-    assert.match(frame(output), /选择模型/); assert.match(frame(output), /same · 当前/);
+    assert.match(frame(output), /(?:选择模型|Select Model)/); assert.match(frame(output), /same · (?:当前|current)/);
     await key('beta'); assert.doesNotMatch(frame(output), /alpha-only/); await key('\r'); await selected();
     assert.equal(app.commandContext().models[0], 'beta-only');
     await openModels(); await key('alpha'); await key('\x1b');
     assert.equal(app.commandContext().models[0], 'beta-only');
-    await key('/status'); await key('\r'); assert.match(frame(output), /提供商：beta/);
-    await key('\x1b[C'); assert.match(frame(output), /最大输出 token/);
+    await key('/status'); await key('\r'); assert.match(frame(output), /(?:提供商：|Provider: )beta/);
+    await key('\x1b[C'); assert.match(frame(output), /(?:最大输出 token|Max tokens)/);
     await key('\x1b'); assert.equal(app.surfaces.getSnapshot(), null); assert.equal(calls, 0);
     assert.deepEqual(await app.journal.load(app.sessionId, 'logox'), []);
   } finally {await act(async () => {await app.close(); instance.unmount();}); await instance.waitUntilExit(); input.destroy(); output.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(cwd, {recursive: true, force: true});}

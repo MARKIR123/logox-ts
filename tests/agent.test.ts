@@ -22,7 +22,7 @@ function call(name: string, args: unknown, id = 'c'): ModelTurn {
 }
 async function fixture(provider: Provider, iterations = 50) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-agent-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}, 'antigravity/local-fixture': {context_window: 131072}}}, {}, cwd, cwd);
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, config, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
@@ -237,8 +237,8 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     round++;
     if (round === 1) return call('dispatch_role', {tasks: [{ownerId: 'aletheia', prompt: '查资料'}, {ownerId: 'techne', prompt: '构建'}]});
     if (round === 2) return assistant('角色已安排');
-    if (request.system.includes('你是 Aletheia')) {assert.equal(request.messages.length, 1); return assistant('侦察结果');}
-    if (request.system.includes('你是 Techne')) {assert.equal(request.messages.length, 1); return assistant('构建结果');}
+    if (request.system.includes('You are Aletheia') || request.system.includes('你是 Aletheia')) {assert.equal(request.messages.length, 1); return assistant('侦察结果');}
+    if (request.system.includes('You are Techne') || request.system.includes('你是 Techne')) {assert.equal(request.messages.length, 1); return assistant('构建结果');}
     assert.match(request.messages.at(-1)!.text, /侦察结果/);
     assert.match(request.messages.at(-1)!.text, /构建结果/);
     onDelta({kind: 'text', text: '汇总完成'});
@@ -409,18 +409,18 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     await f.app.submit('/provider'); await Promise.resolve();
     const task = f.app.ensemble.dispatch('aletheia', 'wait');
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === '模型处理中'));
-    await f.app.surfaces.choose(f.app.surfaces.getSnapshot()!.id, 'ollama');
+    await f.app.surfaces.choose(f.app.surfaces.getSnapshot()!.id, 'antigravity');
     const blocked = f.app.surfaces.getSnapshot(); assert.ok(blocked?.kind === 'picker');
-    assert.match(blocked.error, /任务处理中/); f.app.surfaces.cancel();
-    await assert.rejects(f.app.submit('/model'), /任务处理中/);
-    await assert.rejects(f.app.submit('/provider'), /任务处理中/);
-    await assert.rejects(f.app.submit('/model different'), /任务处理中/);
-    await assert.rejects(f.app.submit('/provider ollama'), /任务处理中/);
+    assert.match(blocked.error, /(?:任务处理中|Tasks are running)/); f.app.surfaces.cancel();
+    await assert.rejects(f.app.submit('/model'), /(?:任务处理中|Tasks are running)/);
+    await assert.rejects(f.app.submit('/provider'), /(?:任务处理中|Tasks are running)/);
+    await assert.rejects(f.app.submit('/model different'), /(?:任务处理中|Tasks are running)/);
+    await assert.rejects(f.app.submit('/provider antigravity'), /(?:任务处理中|Tasks are running)/);
     finish!(); await task.done;
-    await f.app.submit('/provider ollama');
+    await f.app.submit('/provider antigravity');
     await f.app.submit('/model local-fixture');
     await f.app.submit('/status');
     const localStatus = f.app.surfaces.getSnapshot(); assert.ok(localStatus?.kind === 'page');
-    assert.match(localStatus.tabs[0]!.lines.join('\n'), /ollama[\s\S]*local-fixture/);
+    assert.match(localStatus.tabs[0]!.lines.join('\n'), /antigravity[\s\S]*local-fixture/);
   } finally {await f.cleanup();}
 });

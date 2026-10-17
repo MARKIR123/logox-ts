@@ -39,10 +39,10 @@ test('重建应用与会话更换保留模型和档位；已解析 config 保留
     const selectedConfig = await f.load();
     assert.equal(selectedConfig.provider.context_window, undefined, '上次模型不能继承配置中另一模型的窗口');
     assert.equal(selectedConfig.provider.max_output_tokens, undefined);
-    await app.submit('/config'); assert.match(configPage(app), /模型：second/); assert.match(configPage(app), /思考档位：high/); app.surfaces.cancel();
+    await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )second/); assert.match(configPage(app), /(?:思考档位：|Thinking effort: )high/); app.surfaces.cancel();
     const env = await f.load({}, {LOGOX__PROVIDER__MODEL: 'first', LOGOX__PROVIDER__THINKING_EFFORT: 'off'});
     await app.close(); app = await f.app(env);
-    await app.submit('/config'); assert.match(configPage(app), /模型：first/); assert.match(configPage(app), /思考档位：off/); app.surfaces.cancel();
+    await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); assert.match(configPage(app), /(?:思考档位：|Thinking effort: )off/); app.surfaces.cancel();
     const cli = await f.load({provider: {model: 'second', thinking_effort: 'low'}}, {LOGOX__PROVIDER__MODEL: 'first'});
     assert.equal(cli.provider.model, 'second'); assert.equal(cli.provider.thinking_effort, 'low');
     const other = await mkdtemp(join(tmpdir(), 'logox-other-'));
@@ -60,15 +60,15 @@ test('思考及提供商 picker 确认才写入；取消、无效档位、坏文
     await app.submit('/think low'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).effort, 'low');
     await assert.rejects(app.submit('/effort medium'), /未声明支持/);
     await app.submit('/provider'); await new Promise(resolve => setImmediate(resolve)); picker = app.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker');
-    await app.surfaces.choose(picker.id, 'ollama'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).provider, 'ollama');
+    await app.surfaces.choose(picker.id, 'antigravity'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).provider, 'antigravity');
     await app.submit('/provider local first');
     await writeFile(f.file, '{broken'); await assert.rejects(app.submit('/model second'), /保存状态失败/);
     assert.equal(await readFile(f.file, 'utf8'), '{broken');
-    await app.submit('/config'); assert.match(configPage(app), /模型：first/); app.surfaces.cancel();
+    await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); app.surfaces.cancel();
     const diagnostics: string[] = [];
     assert.equal((await loadConfig(f.cwd, {}, {}, f.cwd, f.cwd, text => diagnostics.push(text))).provider.model, 'first'); assert.equal(diagnostics.length, 1);
     await rm(f.file); await mkdir(f.file); await assert.rejects(app.submit('/model second'), /保存状态失败/);
-    await app.submit('/config'); assert.match(configPage(app), /模型：first/); app.surfaces.cancel();
+    await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); app.surfaces.cancel();
   } finally {await app.close(); await f.cleanup();}
 });
 
@@ -78,7 +78,7 @@ test('任务处理中拒绝思考与模型变更，取消后解除等待', async
     respond: async (_request, _delta, signal) => {await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), {once: true})); throw new Error('cancel');},
   }});
   try {
-    await app.submit('synthetic'); await assert.rejects(app.submit('/effort high'), /任务处理中/); await assert.rejects(app.submit('/model second'), /任务处理中/);
+    await app.submit('synthetic'); await assert.rejects(app.submit('/effort high'), /任务处理中|Tasks are running/); await assert.rejects(app.submit('/model second'), /任务处理中|Tasks are running/);
     await assert.rejects(readFile(f.file), {code: 'ENOENT'});
   } finally {await app.close(); await f.cleanup();}
 });
@@ -167,7 +167,7 @@ test('正式应用真实HTTP用量重启保留，模型切换不改旧归属，�
     const lines = page.tabs.find(tab => tab.id === 'usage')!.lines.join('\n'); assert.match(lines, /local\/first/); assert.match(lines, /12 \/ 3/); assert.doesNotMatch(lines, /local\/second/); app.surfaces.cancel();
     assert.equal(requests, 1, '恢复未重放请求');
     await app.close(); app = await f.app(await load(), 'new-session'); assert.equal(app.contexts.meter({sessionId: 'new-session', ownerId: 'logox'}).spent.input, 0);
-    await app.submit('/config'); assert.match(configPage(app), /模型：second/); app.surfaces.cancel();
+    await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )second/); app.surfaces.cancel();
   } finally {await app.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await f.cleanup();}
 });
 

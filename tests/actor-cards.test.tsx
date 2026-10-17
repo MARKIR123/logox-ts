@@ -33,6 +33,10 @@ test('Actor 完成卡片复用运行时摘要，收起显示标题、展开保�
   assert.ok(opened.includes(summary.report));
   assert.ok(opened.includes('工作流程原文'));
   assert.ok(opened.indexOf(summary.report) < opened.indexOf('工作流程原文'));
+  const techneView = buildStageRows(store.getSnapshot(), 's', 'techne', 90, {a: false}, null).map(row => row.text).join('\n');
+  assert.ok(!techneView.includes(summary.title), 'Actor 独立视口不渲染自引用的完成状态卡片');
+  assert.ok(techneView.includes('检查原始任务'), 'Actor 独立视口直接展示派工原任务');
+  assert.ok(techneView.includes('工作流程原文'), 'Actor 独立视口直接展示工作流正文');
   assert.throws(() => store.activities.update('s', 'a', {summary: {...summary, title: '不能改终态'}}), /已结束/);
 });
 

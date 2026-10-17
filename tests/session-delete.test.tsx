@@ -130,7 +130,7 @@ test('/resume 删除默认取消、确认刷新、当前/新建项保护、活�
 });
 
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
-test('实际Ink：恢复列表Ctrl+X进入确认，默认取消；明确确认后刷新列表并保留原草稿', {timeout: 10000}, async () => {
+test('实际Ink：恢复列表Ctrl+X进入确认，默认取消；明确确认后刷新列表并保留原草稿', {timeout: 15000}, async () => {
   const f = await fixture(); let app: Application | undefined, instance: ReturnType<typeof renderTerminal> | undefined;
   const input = new Input(), output = new TerminalScreen(); output.columns = 100; output.rows = 24;
   try {

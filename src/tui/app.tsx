@@ -894,7 +894,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   if (surface?.kind === 'page' && surfaces) return <MouseContext.Provider value={subscribeMouse}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
-    saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items) => {void surfaces.saveToggles(surface.id, tabId, items);}}/></MouseContext.Provider>;
+    saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items) => {void surfaces.saveToggles(surface.id, tabId, items);}}
+    onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseContext.Provider>;
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
@@ -911,7 +912,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     {surface?.kind === 'picker' && surfaces ? <Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
-      notice={notice} onSelect={id => {void surfaces.choose(surface.id, id);}} onCancel={() => surfaces.cancel()}/>
+      effort={surface.effort} effortLevels={surface.effortLevels}
+      notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/>
       : loginState && authentication ? <LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/> : <>
     {!demoScene && !stage && activity && activityHeight > 0 && <Box height={activityHeight} flexShrink={0} overflow="hidden" flexDirection="column">
       <Box ref={activityRef} flexDirection="column" flexShrink={0}><ActivityCard activity={activity} expanded={expanded} hovered={hoveredFoldId === activity.activityId}/></Box>

@@ -54,8 +54,8 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
       context: {tokens: 20, window: 100}, state: '执行中'};
     assert.equal(statusbarText(status, 5), 'Logox');
     assert.equal(statusbarText(status, 25), 'Logox · demo/flash');
-    assert.match(statusbarText(status, 120), /思考 high.*权限 工作区.*上下文 20%.*执行中/);
-    assert.equal(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), '费用 CNY 1.2500');
+    assert.match(statusbarText(status, 120), /(?:Thinking|思考) high.*(?:Permission|权限) 工作区.*(?:Context|上下文) 20%.*执行中/);
+    assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Cost|费用) CNY 1.2500/);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 
@@ -148,10 +148,10 @@ test('正式状态栏保持单行，布局变化立即生效，角色窗口展�
     assert.ok(ui.output.lines.at(-1)?.includes('logox · demo/logox-model'));
     await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('aletheia · demo/aletheia-model'));
     await prefs.save(defaultStatusbar.map(item => ({...item, enabled: item.id === 'context'}))); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.equal(ui.output.lines.at(-1)?.trim(), '上下文 25%');
+    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.equal(ui.output.lines.at(-1)?.trim(), '上下文 25%');
-    assert.ok(!ui.output.lines.at(-2)?.includes('上下文 25%'), '状态不换成第二行');
+    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
+    assert.ok(!ui.output.lines.at(-2)?.match(/(?:上下文|Context) 25%/), '状态不换成第二行');
   } finally {await ui.cleanup(); await rm(dir, {recursive: true, force: true});}
 });
 

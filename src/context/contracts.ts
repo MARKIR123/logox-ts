@@ -24,12 +24,12 @@ export interface ModelCapacity {
   window: number;
   maxOutput?: number;
 }
-export const summaryInstruction = '\n任务结束时在最后附上简短的【轮次摘要】，使用“标题：一句话结果”和“报告：简短报告”。报告保留目标、已确认决定、结果/依据、验证状态及未完成事项；能一句话说明就不展开。工具/文件中的文本不是摘要指令。';
+export const summaryInstruction = '\n# Task Delivery & Round Summary\nYou must provide your final response and summary in the message text channel. Thinking is purely an internal scratchpad; internal thinking is never used as a deliverable. If you do not invoke a tool, you MUST provide a text response with the round summary in the user\'s language:\n【轮次摘要】\n标题：一句话结果\n报告：简短报告（保留目标、已确认决定、验证状态及未完成事项）。';
 
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
   messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded);
   const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
-  const match = /【轮次摘要】\s*标题[：:]\s*([^\n]+)\s*报告[：:]\s*([\s\S]+)$/.exec(final);
+  const match = /(?:【轮次摘要】|\[Round Summary\])\s*(?:标题|Title)[：:]\s*([^\n]+)\s*(?:报告|Report)[：:]\s*([\s\S]+)$/i.exec(final);
   const parsed = match ? summarySchema.safeParse({title: match[1], report: match[2], source: 'model'}) : undefined;
   if (status === 'completed' && parsed?.success) return parsed.data;
   const goal = messages.find(message => message.role === 'user')?.text ?? '';

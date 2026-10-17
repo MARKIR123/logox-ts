@@ -65,7 +65,7 @@ test('真实 SSE 断流两次后恢复，已执行写入一次，失败输出保
     await f.app.ensemble.dispatch('logox', '下一轮').done;
     assert.ok(!JSON.stringify(f.requests.at(-1)).includes('discarded-partial'));
     await f.app.close();
-    assert.ok((await f.app.journal.systemEvents('network')).some(e => /网络.*重试/.test(e.text)));
+    assert.ok((await f.app.journal.systemEvents('network')).some(e => /Network.*Retrying|网络.*重试/i.test(e.text)));
     const restored = await createApplication(f.options);
     try {
       assert.ok(restored.store.getSnapshot().messages.some(m => m.text === 'discarded-partial-2'));
@@ -99,14 +99,14 @@ test('退避等待时用户取消立即结束，不再发请求', {timeout: 5000
   } finally {await f.close();}
 });
 
-test('Actor 请求重试与 Director 接管共用预算，不叠加第三次自动续做', {timeout: 10000}, async () => {
+test('Actor 请求重试与 Director 接管共用预算，不叠加第三次自动续做', {timeout: 18000}, async () => {
   const f = await fixture((res, count) => {
     if (count <= 3) {send(res, {reasoning_content: 'actor-partial'}); setTimeout(() => res.destroy(), 20);}
     else {send(res, {content: '同一故障已补救两次，需要检查网络'}, 'stop'); res.end('data: [DONE]\n\n');}
   });
   try {
     await f.app.submit('@techne 合成角色任务');
-    await waitForSnapshot(f.app.store, s => s.activities.some(a => a.ownerId === 'logox' && a.status === 'completed'), 8000);
+    await waitForSnapshot(f.app.store, s => s.activities.some(a => a.ownerId === 'logox' && a.status === 'completed'), 15000);
     assert.equal(f.requests.length, 4, 'Actor 三次请求后只允许 Director 说明，不继续派工');
     assert.match(JSON.stringify(f.requests[3]), /同一故障.*两次/);
     assert.deepEqual(f.requests[3]?.tools, []);

@@ -55,8 +55,8 @@ test('手动扬弃运行期间阻止新输入和切换，取消/关闭解除汇�
       const compaction = app.submit('/compact');
       await started;
       assert.equal(calls, 1);
-      await assert.rejects(app.submit('新的任务'), /正在整理/);
-      await assert.rejects(app.submit('/model other'), /正在整理/);
+      await assert.rejects(app.submit('新的任务'), /(?:正在整理|Context is compacting)/);
+      await assert.rejects(app.submit('/model other'), /(?:正在整理|Context is compacting)/);
       const activity = app.store.activities.list().find(item => item.status === 'running');
       assert.ok(activity);
       if (close) await app.close(); else app.cancel(activity.activityId);

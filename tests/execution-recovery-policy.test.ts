@@ -146,10 +146,10 @@ test('用户停止与主循环暂停优先，均不自动消费Director纠偏机
 });
 
 test('恢复指令具体缩小步骤，不携带长思考或修改模型额度', () => {
-  assert.match(executionRecoveryInstruction('no_delivery', 'techne'), /最小可交付步骤/);
-  assert.match(executionRecoveryInstruction('no_delivery', 'logox', true), /改变下一步行动方案/);
-  assert.match(executionRecoveryInstruction('truncated_tools', 'techne'), /整批调用未执行/);
-  assert.match(executionRecoveryInstruction('truncated_text', 'logox'), /沿已有正文从断点/);
+  assert.match(executionRecoveryInstruction('no_delivery', 'techne'), /minimum deliverable step/i);
+  assert.match(executionRecoveryInstruction('no_delivery', 'logox', true), /Pivot action plan/i);
+  assert.match(executionRecoveryInstruction('truncated_tools', 'techne'), /batch was not executed/i);
+  assert.match(executionRecoveryInstruction('truncated_text', 'logox'), /from the break point/i);
 });
 
 test('正式应用无交付收束、用户继续沿用Actor阶段与原根，不重放工具或伪造新用户回传', {timeout: 10000}, async () => {

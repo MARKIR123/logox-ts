@@ -73,7 +73,7 @@ npm start -- --provider ollama --check-provider
 npm start -- --provider ollama
 ```
 
-舞台内输入 /provider ollama 使用项目配置的 default_model；/provider deepseek 切回云端。若服务未运行，先在另一个终端执行 ollama serve。LOGOX 不会自动拉取模型或启动服务。
+舞台内输入 /provider ollama 使用项目配置的 default_model；/provider deepseek 切回云端；/provider antigravity 切至本地 Antigravity Tools 反代（`http://127.0.0.1:8045/v1`，无需 API Key，自动支持 100 万 Token 窗口与多模态）。若服务未运行，先在另一个终端执行对应服务。LOGOX 不会自动拉取模型或启动服务。
 
 别的机器可以用自己已有模型执行 --provider ollama --model 实际名称 --check-provider。原 qwen3.8:27b 固定的 num_ctx=98304 在本机未通过，服务环境变量没有覆盖模型参数。本机用以下 Modelfile 新建别名，原模型保持不变：
 

@@ -91,11 +91,17 @@ test('角色级并发调度：不同角色并行执行，同一角色保持严�
     let activeCount = 0;
     let maxParallel = 0;
 
+    let releaseGate = () => {};
+    const gate = new Promise<void>(resolve => { releaseGate = resolve; });
+
     const ensemble = new Ensemble('test-session', store, history, async (_prompt, context) => {
       activeCount++;
       maxParallel = Math.max(maxParallel, activeCount);
-      // 保持短暂执行以观测并发
-      await new Promise(resolve => setTimeout(resolve, 20));
+      if (activeCount >= 2) {
+        releaseGate();
+      } else {
+        await Promise.race([gate, new Promise(resolve => setTimeout(resolve, 100))]);
+      }
       context.say('完成：' + context.ownerId);
       activeCount--;
     }, {concurrency: 'actor'});
@@ -196,11 +202,11 @@ test('人设提示词只增不减：内置核心信条为底座，定制与项�
   // 1. 当角色传入定制提示词时，内置的核心准则（如“与其思考，不如实践”）依然保留在最前，定制内容追加在后
   const customRole = {prompt: '【本项目特别要求】专注于单文件 SVG 动画。', visibility: {actorId: 'techne'}};
   const base = await agentRequestBase('.', 'techne', [], undefined, customRole);
-  assert.ok(base.system.includes('与其思考，不如实践'));
-  assert.ok(base.system.includes('【定制补充人设】'));
+  assert.ok(base.system.includes('Action over contemplation'));
+  assert.ok(base.system.includes('【定制补充人设】') || base.system.includes('# Custom Persona Extension'));
   assert.ok(base.system.includes('专注于单文件 SVG 动画'));
   // 验证基础人设排在定制人设前面
-  const baseIndex = base.system.indexOf('与其思考，不如实践');
+  const baseIndex = base.system.indexOf('Action over contemplation');
   const customIndex = base.system.indexOf('专注于单文件 SVG 动画');
   assert.ok(baseIndex < customIndex);
 
@@ -208,7 +214,7 @@ test('人设提示词只增不减：内置核心信条为底座，定制与项�
   const scoutRole = {prompt: '你是完全独立的自定义角色。', visibility: {actorId: 'scout'}};
   const scoutBase = await agentRequestBase('.', 'scout', [], undefined, scoutRole);
   assert.ok(scoutBase.system.includes('你是完全独立的自定义角色。'));
-  assert.ok(!scoutBase.system.includes('与其思考，不如实践'));
+  assert.ok(!scoutBase.system.includes('Action over contemplation'));
 });
 
 test('非流式降级支持：stream: false 正确解析非流式响应并交付工具调用', async () => {
@@ -239,4 +245,12 @@ test('非流式降级支持：stream: false 正确解析非流式响应并交付
   assert.equal(turn.message.toolCalls[0]!.name, 'read');
   assert.equal(turn.stop, 'tools');
   assert.deepEqual(turn.usage, {input: 50, output: 25});
+});
+
+test('工具容错：shell 支持大模型发送的毫秒级 timeout 自动归一化，grep 支持 offset', async () => {
+  const {validToolCall} = await import('../src/tools/tools.js');
+  // 1. 模型传入 timeout: 10000 (10秒，常见于 Gemini/Claude 调用)
+  assert.equal(validToolCall({id: 'c1', name: 'shell', arguments: '{"command":"node -v","timeout":10000}'}), true);
+  // 2. grep 传入额外 offset: 30
+  assert.equal(validToolCall({id: 'c2', name: 'grep', arguments: '{"pattern":"pelican","path":".","offset":30}'}), true);
 });

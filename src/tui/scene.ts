@@ -227,11 +227,12 @@ export function insetFrame(parent: FrameWrap, bg: string | undefined, left = 2, 
   };
 }
 
+const segmenter = new Intl.Segmenter('zh', {granularity: 'grapheme'});
+
 // Preserve segment styling while wrapping at display-cell boundaries.
 function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSegment[][] {
   const lines: SceneSegment[][] = [[]];
   let used = 0;
-  const segmenter = new Intl.Segmenter('zh', {granularity: 'grapheme'});
   for (const segment of segments) {
     let offset = segment.selectionOffset ?? 0;
     for (const {segment: part} of segmenter.segment(safeText(segment.text))) {
@@ -288,7 +289,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       for (const [partIndex, segment] of segments.entries()) {
         let fieldOffset = segment.selectionOffset ?? offset;
         const key = segment.selectionKey ?? (partIndex >= frame.leftSegments.length && partIndex < frame.leftSegments.length + inner.length ? id : id + ':frame:' + index);
-        for (const {segment: glyph} of new Intl.Segmenter('zh', {granularity: 'grapheme'}).segment(segment.text)) {
+        for (const {segment: glyph} of segmenter.segment(segment.text)) {
           const width = Math.max(1, stringWidth(glyph));
           selectionCells.push({column, width, key, offset: fieldOffset});
           column += width; fieldOffset += glyph.length;

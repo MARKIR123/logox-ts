@@ -9,11 +9,14 @@ import {CommandPane, panePadding} from './command-pane.js';
 import {ToggleList, moveToggle} from './toggle-list.js';
 import {useMouse} from './mouse.js';
 
-export function TabbedPage({title, tabs, initialTab, width, height, onClose, onSave, saving = false, error = '', notice = ''}: {
+export function TabbedPage({title, tabs, initialTab, width, height, onClose, onSave, onAction, saving = false, error = '', notice = ''}: {
   title: string; tabs: readonly CommandTab[]; initialTab: string; width: number; height: number; onClose(): void;
-  onSave?(tabId: string, items: readonly CommandToggle[]): void; saving?: boolean; error?: string; notice?: string;
+  onSave?(tabId: string, items: readonly CommandToggle[]): void;
+  onAction?(tabId: string, action: string): void;
+  saving?: boolean; error?: string; notice?: string;
 }) {
   const [active, setActive] = useState(initialTab);
+  const [focusArea, setFocusArea] = useState<'tabs' | 'content'>('tabs');
   const [offsets, setOffsets] = useState<Record<string, number>>({});
   const [choices, setChoices] = useState<Record<string, readonly CommandToggle[]>>({});
   const [focused, setFocused] = useState<Record<string, number>>({});
@@ -33,18 +36,49 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   };
   useInput((input, key) => {
     if (key.eventType === 'release') return;
-    if (key.escape) {if (!saving) onClose(); return;}
+    if (key.escape) {
+      if (!saving) onClose();
+      return;
+    }
     if (key.ctrl) return;
     if (saving) return;
-    if ((key.tab || !items && (key.leftArrow || key.rightArrow)) && tabs.length) {
-      setActive(tabs[(index + tabs.length + (key.leftArrow || key.tab && key.shift ? -1 : 1)) % tabs.length]!.id); return;
+    // 顶层导航或未聚焦内容时，左右键与 Tab 始终切换页签，绝不阻断导航
+    if ((key.tab || focusArea === 'tabs' && (key.leftArrow || key.rightArrow)) && tabs.length > 0) {
+      const step = (key.leftArrow || (key.tab && key.shift)) ? -1 : 1;
+      setActive(tabs[(index + tabs.length + step) % tabs.length]!.id);
+      setFocusArea('tabs');
+      return;
     }
     if (!tab) return;
     if (items) {
-      if (key.upArrow || key.downArrow) setFocused(previous => ({...previous, [tab.id]: Math.max(0, Math.min(items.length - 1, selected + (key.upArrow ? -1 : 1)))}));
-      else if (key.leftArrow || key.rightArrow) reorder(selected, key.leftArrow ? -1 : 1);
-      else if (input === ' ') toggle(selected);
-      else if (key.return) onSave?.(tab.id, items);
+      if (focusArea === 'tabs') {
+        if (key.downArrow) {setFocusArea('content'); return;}
+        if (input === ' ') {setFocusArea('content'); toggle(selected); return;}
+        if (input === '[' || input === ']' || input === '<' || input === '>') {
+          setFocusArea('content'); reorder(selected, (input === '[' || input === '<') ? -1 : 1); return;
+        }
+        if (key.return) {onSave?.(tab.id, items); return;}
+      } else {
+        if (key.upArrow) {
+          if (selected === 0) setFocusArea('tabs');
+          else setFocused(previous => ({...previous, [tab.id]: selected - 1}));
+          return;
+        }
+        if (key.downArrow) {
+          setFocused(previous => ({...previous, [tab.id]: Math.min(items.length - 1, selected + 1)}));
+          return;
+        }
+        if (key.leftArrow || key.rightArrow || input === '[' || input === ']' || input === '<' || input === '>') {
+          reorder(selected, (key.leftArrow || input === '[' || input === '<') ? -1 : 1);
+          return;
+        }
+        if (input === ' ') {toggle(selected); return;}
+        if (key.return) {onSave?.(tab.id, items); return;}
+      }
+      return;
+    }
+    if (tab.id === 'permissions' && (input === ' ' || input === 'm' || input === 'M')) {
+      onAction?.('permissions', 'toggle_mode');
       return;
     }
     let next: number | undefined;
@@ -73,7 +107,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       else toggle(at);
     }
   });
-  const footer = saving ? '正在保存…' : items ? '↑↓ 选择 · Space 开关 · ←→ 排序 · Enter 保存 · Tab 页签 · Esc 放弃' : '←→ / Tab 页签 · ↑↓ / PgUp PgDn 滚动 · Esc 返回';
+  const footer = saving ? 'Saving...' : items ? '←→ / Tab Switch · ↑↓ Select · Space Toggle · [ / ] Reorder · Enter Save · Esc Discard' : '←→ / Tab Switch · ↑↓ / PgUp PgDn Scroll · Esc Back';
   return <CommandPane title={title} width={width} height={height} footer={notice || footer}>
     <Box height={1} flexShrink={0} overflow="hidden">
       {stringWidth(tabs.map(item => '  ' + item.title + '  ').join('')) > columns ? <Text color={tab?.color ?? palette.accent} bold wrap="truncate">{clipLine('❯ ' + (tab?.title ?? '') + ' · ' + (index + 1) + '/' + tabs.length, columns)}</Text> : tabs.map(item => <Text key={item.id} bold={item.id === tab?.id} color={item.id === tab?.id ? item.color ?? palette.accent : palette.muted}>
@@ -84,8 +118,43 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     <Box height={contentHeight} flexShrink={0} overflow="hidden" flexDirection="column">
       {items ? <>
         <ToggleList items={items} selected={selected} start={start} count={toggleHeight} width={columns} disabled={saving}/>
-        <Text color={error ? palette.error : palette.muted} wrap="truncate">{clipLine(error || '顺序同时决定窄屏显示优先级', columns)}</Text>
-      </> : lines.slice(offset, offset + contentHeight).map((line, i) => <Box key={i} height={1} flexShrink={0}><Text color={offset + i === 0 ? tab?.color ?? palette.fg : palette.fg} wrap="truncate">{clipLine(line, columns) || ' '}</Text></Box>)}
+        <Text color={error ? palette.error : palette.muted} wrap="truncate">{clipLine(error || 'Order determines priority on narrow screens', columns)}</Text>
+      </> : lines.slice(offset, offset + contentHeight).map((line, i) => {
+        const isFirst = offset + i === 0;
+        if (!line || !line.trim()) {
+          return <Box key={i} height={1} flexShrink={0}><Text> </Text></Box>;
+        }
+        if (line.startsWith('──') || line.startsWith('---')) {
+          return (
+            <Box key={i} height={1} flexShrink={0}>
+              <Text color="#555555" wrap="truncate">{clipLine(line, columns)}</Text>
+            </Box>
+          );
+        }
+        if (isFirst) {
+          return (
+            <Box key={i} height={1} flexShrink={0}>
+              <Text color={tab?.color ?? palette.accent} bold wrap="truncate">{clipLine(line, columns)}</Text>
+            </Box>
+          );
+        }
+        const colonIndex = line.indexOf(': ');
+        if (colonIndex > 0 && colonIndex < 35 && !line.startsWith('http') && !line.startsWith('  • ')) {
+          const label = line.slice(0, colonIndex + 1);
+          const value = line.slice(colonIndex + 1).trimStart();
+          return (
+            <Box key={i} height={1} flexShrink={0}>
+              <Text color="#888888">{label} </Text>
+              <Text color={palette.fg} bold wrap="truncate">{clipLine(value, Math.max(1, columns - stringWidth(label) - 1))}</Text>
+            </Box>
+          );
+        }
+        return (
+          <Box key={i} height={1} flexShrink={0}>
+            <Text color={palette.fg} wrap="truncate">{clipLine(line, columns)}</Text>
+          </Box>
+        );
+      })}
     </Box>
   </CommandPane>;
 }

@@ -22,6 +22,7 @@ export function toolTitle(call: ToolCall): string {
 /** Runtime owns each request/call clock. Rendering samples it without publishing timer ticks. */
 export class Steps {
   private readonly ids = new Set<string>();
+  private readonly stepsCache = new Map<string, Step>();
   private groupId: string | undefined;
   private groupThinking: string | undefined;
   constructor(private readonly store: RuntimeStore, private readonly identity: {sessionId: string; ownerId: string; activityId: string},
@@ -49,25 +50,37 @@ export class Steps {
     if (stage) step = {...step, stage};
     const id = this.store.message(this.identity.sessionId, this.identity.ownerId, kind === 'tool' ? 'notice' : 'assistant', text,
       {activityId: this.identity.activityId, kind, step});
-    this.ids.add(id); return id;
+    this.ids.add(id);
+    this.stepsCache.set(id, step);
+    return id;
   }
   get(id: string): Step {
-    const step = this.store.getSnapshot().messages.find(message => message.id === id)?.step;
-    if (!step) throw new Error('步骤不存在');
-    return step;
+    const fromStore = this.store.getSnapshot().messages.find(message => message.id === id)?.step;
+    if (fromStore) {
+      this.stepsCache.set(id, fromStore);
+      return fromStore;
+    }
+    const cached = this.stepsCache.get(id);
+    if (cached) return cached;
+    throw new Error('Step not found: ' + id);
   }
   start(id: string): void {
     const step = this.get(id);
     if (['completed', 'failed', 'cancelled', 'running'].includes(step.state)) return;
     this.phase('tool');
-    this.store.updateMessage(id, {step: {...step, state: 'running', runningSince: this.now(), waiting: undefined}});
+    const updated = {...step, state: 'running' as const, runningSince: this.now(), waiting: undefined};
+    this.stepsCache.set(id, updated);
+    this.store.updateMessage(id, {step: updated});
   }
   wait(id: string, reason: string): () => void {
     const previous = this.get(id);
     if (['completed', 'failed', 'cancelled'].includes(previous.state)) return () => {};
     const {runningSince: _, ...step} = previous;
     this.store.updateMessage(id, {step: {...step, state: 'waiting', elapsedMs: stepElapsed(previous, this.now()), waiting: reason}});
-    this.phase(reason.includes('许可') || reason.includes('审批') ? 'approval' : reason.includes('重试') ? 'retry' : 'question');
+    const r = reason.toLowerCase();
+    this.phase(reason.includes('许可') || reason.includes('审批') || r.includes('approval') || r.includes('permission') ? 'approval'
+      : reason.includes('重试') || r.includes('retry') ? 'retry'
+      : 'question');
     let restored = false;
     return () => {
       if (restored || this.get(id).state !== 'waiting') return;
@@ -80,7 +93,10 @@ export class Steps {
   finish(id: string, state: 'completed' | 'failed' | 'cancelled', text?: string, disposition?: Step['disposition']): Step {
     const previous = this.get(id), {runningSince: _, waiting: __, ...rest} = previous;
     const step: Step = {...rest, state, elapsedMs: stepElapsed(previous, this.now()), ...(disposition ? {disposition} : {})};
-    this.store.updateMessage(id, {step, ...(text !== undefined ? {text} : {})});
+    this.stepsCache.set(id, step);
+    try {
+      this.store.updateMessage(id, {step, ...(text !== undefined ? {text} : {})});
+    } catch {}
     return step;
   }
   close(state: 'completed' | 'failed' | 'cancelled'): void {

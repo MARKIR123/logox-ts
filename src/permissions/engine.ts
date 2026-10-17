@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {withFileLock} from '../store/file-lock.js';
 
 import {shellWords, shellImpact, shellCommands} from './shell.js';
+import {isScratchpadPath} from '../kernel/scratchpad.js';
 export {shellWords} from './shell.js';
 export const permissionModeSchema = z.enum(['default', 'auto', 'creative']);
 export const permissionRuleSchema = z.strictObject({
@@ -27,10 +28,12 @@ function globMatch(pattern: string, value: string): boolean {
 }
 export class PermissionEngine {
   private rules: PermissionRule[] = [];
+  private scratchpadDir?: string;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
   subscribe(listener: () => void): () => void {this.listeners.add(listener); return () => {this.listeners.delete(listener);};}
   private changed(): void {for (const listener of this.listeners) listener();}
+  setScratchpadDir(dir: string): void {this.scratchpadDir = dir;}
   constructor(readonly root: string, public mode: PermissionMode = 'default', private readonly file = join(root, '.logox', 'permissions.json')) {}
   private async readProject() {
     let raw: string;
@@ -99,6 +102,9 @@ export class PermissionEngine {
       })()
       : target.paths.some(path => globMatch(rule.pattern, path))));
     if (this.rules.some(rule => rule.decision === 'deny' && matches(rule))) return {decision: 'deny', reason: '命中显式拒绝规则'};
+    if (this.scratchpadDir && target.paths.length > 0 && target.paths.every(p => isScratchpadPath(p, this.scratchpadDir!))) {
+      return {decision: 'allow', reason: 'Scratchpad directory is allowed for temporary operations'};
+    }
     const danger = target.danger ?? (impact?.kind === 'danger' ? impact.reason : undefined);
     if (danger) return {decision: this.mode === 'creative' ? 'deny' : 'ask', reason: danger};
     if (this.rules.some(rule => rule.decision === 'allow' && matches(rule))) return {decision: 'allow', reason: '命中允许规则'};

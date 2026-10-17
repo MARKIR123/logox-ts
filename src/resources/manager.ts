@@ -32,11 +32,13 @@ function metadata(text: string) {
   return {fields, body, description: (fields.description || body.split(/\r?\n/).find(line => line.trim())?.replace(/^#+\s*/, '') || '').slice(0, 500)};
 }
 async function ancestors(cwd: string, boundary?: string) {
+  const canonicalCwd = await realpath(cwd).catch(() => resolve(cwd));
+  const canonicalBoundary = boundary ? await realpath(boundary).catch(() => resolve(boundary)) : undefined;
   const directories: string[] = [];
-  let current = resolve(cwd);
+  let current = canonicalCwd;
   for (;;) {
     directories.unshift(current);
-    if (boundary && key(current) === key(resolve(boundary))) break;
+    if (canonicalBoundary && key(current) === key(canonicalBoundary)) break;
     const parent = dirname(current);
     if (parent === current) break;
     current = parent;

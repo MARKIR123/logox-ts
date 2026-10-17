@@ -53,7 +53,7 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
     }}};
   let app = await createApplication(options);
   try {
-    await assert.rejects(app.submit('/unknown'), /未知命令/);
+    await assert.rejects(app.submit('/unknown'), /未知命令|Unknown command/);
     await app.submit('/model second'); await app.submit('/model final');
     assert.equal(seen.length, 0, '操作不会额外启动模型');
     assert.equal(app.isSessionPersistent(), false);
@@ -62,7 +62,7 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
     assert.equal(app.store.getSnapshot().activities.at(-1)?.status, 'completed', JSON.stringify(app.store.getSnapshot().activities));
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.match(seen[0]!.system, /实际任务模型：.+\/final/);
-    assert.ok(seen[0]!.messages.every(message => !/未知命令|当前模型：/.test(message.text)));
+    assert.ok(seen[0]!.messages.every(message => !/未知命令|当前模型：|Unknown command|Current model:/.test(message.text)));
     await app.submit('/model next'); await app.submit('/model latest');
     await app.submit('/permissions mode creative');
     await app.submit('/permissions add session deny write private.txt');

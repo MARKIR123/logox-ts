@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {commandSuggestions, applyCommandSuggestion} from '../src/tui/completion.js';
 import {commandCatalog} from '../src/commands.js';
 import {graphemes, type Draft} from '../src/tui/editor.js';
-const context = {providers: ['deepseek', 'ollama'], loginProviders: ['deepseek'], models: ['模型🙂', 'fixture']};
+const context = {providers: ['deepseek', 'antigravity'], loginProviders: ['deepseek'], models: ['模型🙂', 'fixture']};
 const draft = (text: string): Draft => ({text, cursor: graphemes(text).length});
 
 test('命令目录补全现有命令、参数及中文模型，保留光标后的原文', () => {
@@ -15,13 +15,17 @@ test('命令目录补全现有命令、参数及中文模型，保留光标后�
   assert.equal(model.execute, true);
   assert.deepEqual(applyCommandSuggestion(draft('/model'), model), draft('/model '));
   assert.deepEqual(commandSuggestions(draft('/login '), context).map(item => item.label), ['deepseek']);
-  assert.deepEqual(commandSuggestions(draft('/provider o'), context).map(item => item.label), ['ollama']);
-  const value = commandSuggestions(draft('/model 模'), context)[0]!;
-  assert.deepEqual(applyCommandSuggestion(draft('/model 模'), value), draft('/model 模型🙂'));
-  const middle = {text: '/proviDER ollama', cursor: 4};
+  assert.deepEqual(commandSuggestions(draft('/provider a'), context).map(item => item.label), ['antigravity']);
+  assert.deepEqual(commandSuggestions(draft('/model 模'), context), []);
+  assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia']);
+  const actorCompletion = commandSuggestions(draft('/model a'), context).find(item => item.label === 'aletheia')!;
+  assert.equal(actorCompletion.label, 'aletheia');
+  assert.equal(actorCompletion.execute, true);
+  assert.deepEqual(applyCommandSuggestion(draft('/model a'), actorCompletion), draft('/model aletheia'));
+  const middle = {text: '/proviDER antigravity', cursor: 4};
   const provider = commandSuggestions(middle, context).find(item => item.label === '/provider')!;
-  assert.deepEqual(applyCommandSuggestion(middle, provider), {text: '/provider ollama', cursor: 9});
-  for (const text of ['你好 /lo', '/unknown', '/login\n', '/cast 工作', '/provider ollama 模型']) {
+  assert.deepEqual(applyCommandSuggestion(middle, provider), {text: '/provider antigravity', cursor: 9});
+  for (const text of ['你好 /lo', '/unknown', '/login\n', '/cast 工作', '/provider antigravity 模型']) {
     assert.deepEqual(commandSuggestions(draft(text), context), []);
   }
 });
@@ -60,7 +64,7 @@ test('应用提供公开候选：模型查询缓存按提供商隔离，切换�
     await app.submit('/help');
     const page = app.surfaces.getSnapshot();
     assert.ok(page?.kind === 'page');
-    assert.ok(page.tabs.find(tab => tab.id === 'commands')!.lines.some(line => line.includes('/login [提供商]')));
+    assert.ok(page.tabs.find(tab => tab.id === 'commands')!.lines.some(line => line.includes('/login [provider]') || line.includes('/login [提供商]')));
   } finally {
     await app.close(); await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(cwd, {recursive: true, force: true});

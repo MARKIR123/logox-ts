@@ -210,7 +210,7 @@ test('模式颜色：状态栏保留名称和宽度规则，三档各自颜色�
     const status = {ownerId: 'logox', name: 'Logox', state: '就绪', permission: mode};
     const parts = statusbarParts(status, 80, [{id: 'permission', enabled: true}]);
     assert.equal(parts[0]?.color, permissionModes[mode].color);
-    assert.equal(statusbarText(status, 80, [{id: 'permission', enabled: true}]), '权限 ' + mode);
+    assert.equal(statusbarText(status, 80, [{id: 'permission', enabled: true}]), 'Permission ' + mode);
     assert.deepEqual(statusbarParts(status, 2, [{id: 'permission', enabled: true}]), []);
   }
 });

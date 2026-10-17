@@ -6,7 +6,7 @@ model = ""
 temperature = 0.2
 thinking_effort = "auto"
 max_tokens = 16384
-timeout = 120 # 连续无有效模型进展的秒数；持续输出不受总时长限制
+timeout = 600 # 连续无有效模型进展的秒数（默认 600 秒 / 10 分钟，对齐 Claude Code 与深度推理长思考）
 
 # 全局界面主题与角色强调色（均可选，默认采用 LOGOX TS 官方配色）
 # [theme]
@@ -33,7 +33,9 @@ low_watermark_ratio = 0.5
 # max_output_tokens = 2048
 
 [kernel]
-max_iterations = 50
+# 0 = unlimited continuous loop (Claude Code mode; loops until task complete or user interrupts with Esc)
+# Set a positive number (e.g. 50) if you want an interactive prompt every N round trips.
+max_iterations = 0
 max_retries = 3
 
 # 可选：只读 pi 已有的 API key 文件，不复制密钥。
@@ -43,6 +45,11 @@ max_retries = 3
 # api_key_env = "DEEPSEEK_API_KEY"
 # auth_file = "~/.pi/agent/auth.json"
 # default_model = "从 --list-models 查询并选择的名称"
+
+# 本地反代服务（如 Antigravity Tools，内置 preset，无需 API Key，自动适配 100 万 Token 窗口）：
+# [provider]
+# name = "antigravity"
+# model = "gemini-3.8-flash"
 
 # 自定义 OpenAI 兼容服务：
 # [providers.work]

@@ -3,18 +3,32 @@ import type {StageStatus} from '../runtime/stage-status.js';
 import {defaultStatusbar, type StatusbarId, type StatusbarModule} from '../config/statusbar-preferences.js';
 import {permissionModes} from '../runtime/permission-mode.js';
 
+function translateState(state: string): string {
+  switch (state) {
+    case '就绪': return 'ready';
+    case '运行中': return 'running';
+    case '排队中': case '排队': return 'queued';
+    case '待回答': case '等待回答': return 'waiting';
+    case '已暂停': return 'paused';
+    case '已完成': return 'completed';
+    case '失败': return 'failed';
+    case '已停止': case '已取消': return 'cancelled';
+    default: return state;
+  }
+}
+
 function moduleText(id: StatusbarId, status: StageStatus): string {
   switch (id) {
     case 'role': return status.name;
-    case 'model': return status.model ? status.model.provider + '/' + status.model.model : '模型未配置';
-    case 'effort': return '思考 ' + (status.effort ?? '不支持');
-    case 'permission': return '权限 ' + (status.permission ?? '未统计');
-    case 'context': return status.context ? '上下文 ' + Math.round(status.context.tokens / Math.max(1, status.context.window) * 100) + '%' : '上下文未统计';
-    case 'state': return status.state;
-    case 'tokens': return 'Token ' + (status.tokens === undefined ? '未统计' : status.tokens.toLocaleString('en-US'));
-    case 'cost': return status.cost === undefined ? '费用未统计' : '费用 ' + (status.costCurrency ? status.costCurrency + ' ' : '') + status.cost.toFixed(4);
-    case 'session': return '会话 ' + (status.session ?? '未保存');
-    case 'project': return status.project ?? '目录未统计';
+    case 'model': return status.model ? status.model.provider + '/' + status.model.model : 'No model';
+    case 'effort': return 'Thinking ' + (status.effort ?? 'unsupported');
+    case 'permission': return 'Permission ' + (status.permission ?? 'none');
+    case 'context': return status.context ? 'Context ' + Math.round(status.context.tokens / Math.max(1, status.context.window) * 100) + '%' : 'Context N/A';
+    case 'state': return translateState(status.state);
+    case 'tokens': return 'Tokens ' + (status.tokens === undefined ? 'N/A' : status.tokens.toLocaleString('en-US'));
+    case 'cost': return status.cost === undefined ? 'Cost N/A' : 'Cost ' + (status.costCurrency ? status.costCurrency + ' ' : '') + status.cost.toFixed(4);
+    case 'session': return 'Session ' + (status.session ?? 'unsaved');
+    case 'project': return status.project ?? 'Project N/A';
   }
 }
 

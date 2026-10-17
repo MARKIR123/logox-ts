@@ -59,8 +59,8 @@ test('实际 Ink 和独立画布切换会话：picker 取消保留草稿，切�
     await key('\x1b');
     assert.equal(app.tools, tools); assert.equal(app.resources, resources); assert.equal(app.extensions, extensions);
     await key('/config'); await key('\r');
-    assert.ok(output.lines.some(line => line.includes('模型：retained')));
-    assert.ok(output.lines.some(line => line.includes('思考档位：high')));
+    assert.ok(output.lines.some(line => /(?:模型：|Model: )retained/.test(line)));
+    assert.ok(output.lines.some(line => /(?:思考档位：|Thinking effort: )high/.test(line)));
     await key('\x1b');
     await act(async () => {output.columns = 120; output.emit('resize');});
     await key('/permissions'); await key('\r'); await key('\r');

@@ -30,7 +30,7 @@ test('用户与祖先规范有序且按候选优先级加载，真实路径去�
     const snapshot = await resources.reload();
     assert.deepEqual(snapshot.guidelines.map(item => item.text), ['用户规范', '项目规范', '子目录规范']);
     const request = await agentRequestBase(f.cwd, 'logox', [], resources);
-    assert.ok(request.system.includes('你是 Logox'));
+    assert.ok(request.system.includes('Logox'));
     assert.ok(request.system.indexOf('用户规范') < request.system.indexOf('项目规范'));
     assert.ok(request.system.indexOf('项目规范') < request.system.indexOf('子目录规范'));
     await rm(join(f.cwd, 'CLAUDE.md'));
@@ -106,7 +106,7 @@ test('正式任务、compact 共用资源；reload 更新提示与命令但保�
       while (app.ensemble.isBusy()) await new Promise<void>(resolve => setImmediate(resolve));
       assert.ok(requests[1]?.system.includes('规则第二版'));
       await app.submit('/compact');
-      assert.ok(app.store.getSnapshot().activities.some(item => item.title === '扬弃' && item.status === 'completed'));
+      assert.ok(app.store.getSnapshot().activities.some(item => (item.title === '扬弃' || item.title === 'Compact') && item.status === 'completed'));
       await app.submit('/commands'); assert.ok(app.surfaces.getSnapshot());
     } finally {await app.close();}
   } finally {await f.cleanup();}

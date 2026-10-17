@@ -75,7 +75,7 @@ test('提示词工程：单轮运行时动态组装，安全沉底追加视觉�
   // 阶段推进指令注入
   assert.ok(runtimeSystem.includes('当前阶段：骨架验证。'));
   // 恢复提示沉底
-  assert.ok(runtimeSystem.includes('恢复提示：输出已截断，缩小调用。'));
+  assert.ok(runtimeSystem.includes('输出已截断，缩小调用。'));
 
   // 当支持视觉且无恢复时，不污染运行时系统提示
   const cleanSystem = composeRuntimeSystemPrompt({

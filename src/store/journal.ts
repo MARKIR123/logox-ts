@@ -158,6 +158,13 @@ export class Journal implements HistoryStore {
       const next = existing ? tasks.map(item => item.activityId === task.activityId ? {...parsed, time: existing.time} : item)
         : [...tasks, {...parsed, time: Math.max(parsed.time, ...tasks.map(item => item.time + 1))}];
       await atomicWrite(this.path(sessionId, '$session') + '.tasks.json', Buffer.from(JSON.stringify(next)));
+      try {
+        const treeDir = join(this.directory, sessionId);
+        await mkdir(treeDir, {recursive: true});
+        await atomicWrite(join(treeDir, 'tasks.json'), Buffer.from(JSON.stringify(next, null, 2)));
+        const readme = `# Session: ${sessionId}\n\n- **Director Log**: \`director.jsonl\` (Logox main conversation)\n- **Tasks Ledger**: \`tasks.json\` (All dispatched subagent tasks)\n- **System Events**: \`events.json\` (Environment updates and notices)\n- **Subagents**: \`subagents/<actor>.jsonl\` (Techne, Kalon, Aletheia)\n`;
+        await atomicWrite(join(treeDir, 'README.md'), Buffer.from(readme));
+      } catch {}
     });
     this.checkpointTail = operation.catch(() => {});
     return operation;
@@ -172,6 +179,11 @@ export class Journal implements HistoryStore {
       if (events.some(item => item.sessionId !== parsed.sessionId)) throw new Error('系统记录会话身份不匹配');
       if (events.some(item => item.id === parsed.id)) return;
       await atomicWrite(file, Buffer.from(JSON.stringify([...events, parsed])));
+      try {
+        const treeDir = join(this.directory, parsed.sessionId);
+        await mkdir(treeDir, {recursive: true});
+        await atomicWrite(join(treeDir, 'events.json'), Buffer.from(JSON.stringify([...events, parsed], null, 2)));
+      } catch {}
     });
     this.systemTail = pending.catch(() => {});
     return pending;
@@ -213,6 +225,17 @@ export class Journal implements HistoryStore {
     await mkdir(this.directory, {recursive: true});
     await this.loadRaw(entry.sessionId, entry.ownerId);
     await appendFile(this.path(entry.sessionId, entry.ownerId), JSON.stringify(entry) + '\n', 'utf8');
+    try {
+      const isDirector = entry.ownerId === 'logox';
+      const treeDir = isDirector
+        ? join(this.directory, entry.sessionId)
+        : join(this.directory, entry.sessionId, 'subagents');
+      await mkdir(treeDir, {recursive: true});
+      const treeFile = isDirector
+        ? join(treeDir, 'director.jsonl')
+        : join(treeDir, `${entry.ownerId}.jsonl`);
+      await appendFile(treeFile, JSON.stringify(entry) + '\n', 'utf8');
+    } catch {}
   }
   private async read(file: string): Promise<string | undefined> {
     try {return await readFile(file, 'utf8');}
@@ -234,6 +257,17 @@ export class Journal implements HistoryStore {
     const records = (await this.rounds(sessionId, ownerId, entries)).filter(record => record.activityId !== activityId);
     records.push({activityId, start, end: entries.length, sourceHash: digest(entries.slice(start)), status, summary});
     await atomicWrite(await this.statePath(sessionId, ownerId, 'rounds'), Buffer.from(JSON.stringify(records)));
+    try {
+      const isDirector = ownerId === 'logox';
+      const treeDir = isDirector
+        ? join(this.directory, sessionId)
+        : join(this.directory, sessionId, 'subagents');
+      await mkdir(treeDir, {recursive: true});
+      const roundsFile = isDirector
+        ? join(treeDir, 'director.rounds.json')
+        : join(treeDir, `${ownerId}.rounds.json`);
+      await atomicWrite(roundsFile, Buffer.from(JSON.stringify(records, null, 2)));
+    } catch {}
     return summary;
   }
   async loadContext(sessionId: string, ownerId: string, entries: readonly HistoryEntry[]): Promise<ContextState | undefined> {

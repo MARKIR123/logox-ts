@@ -112,8 +112,11 @@ export class ProviderRegistry {
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
     const override = config.models[name + '/' + settings.model];
     const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
-    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window;
-    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput;
+    const isAntigravity = name === 'antigravity' || settings.baseUrl.includes('8045');
+    const antigravityWindow = isAntigravity ? (settings.model.toLowerCase().includes('gemini') || settings.model.toLowerCase().includes('claude') ? 1_000_000 : 128_000) : undefined;
+    const antigravityOutput = isAntigravity ? (settings.model.toLowerCase().includes('claude') ? 128_000 : 64_000) : undefined;
+    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window ?? antigravityWindow;
+    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? antigravityOutput;
     if (!window) throw new ProviderError('模型 ' + name + '/' + settings.model + ' 的上下文窗口未知；在 [models."' + name + '/' + settings.model + '"] 配置 context_window 后重启（本地填实际 num_ctx）。', false, 'capacity');
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};

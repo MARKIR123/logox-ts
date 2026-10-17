@@ -493,7 +493,7 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
   let instance!: ReturnType<typeof render>;
   await act(async () => {
     instance = render(<App stage sessionId="s" store={store}
-      getCommandContext={() => ({providers: ['deepseek', 'ollama'], loginProviders: ['deepseek'], models: ['fixture', 'qwen-test']})}
+      getCommandContext={() => ({providers: ['deepseek', 'antigravity'], loginProviders: ['deepseek'], models: ['fixture', 'qwen-test']})}
       onSubmit={async text => {submissions.push(text);}} onCancel={() => {}} onClose={async () => store.interactions.close()}/>,
       {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, maxFps: 100, patchConsole: false, exitOnCtrlC: false});
   });
@@ -504,28 +504,28 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
   const frame = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   try {
     await key('/');
-    assert.match(frame(), /❯ \/help/); assert.match(frame(), /登录并保存 API key/);
+    assert.match(frame(), /❯ \/help/); assert.match(frame(), /(?:登录并保存 API key|Log in and save)/);
     await key('\x1b[B'); await key('\t');
     assert.deepEqual(submissions, [], 'Tab 不执行命令，也不抢占审批');
     assert.match(frame(), /❯ \/login/);
     await key('\r'); assert.deepEqual(submissions, ['/login']);
-    await key('/mod'); assert.match(frame(), /选择已登录提供商的模型/);
-    await key('\t'); assert.match(frame(), /qwen-test/);
+    await key('/mod'); assert.match(frame(), /(?:选择已登录提供商的模型|Select model|Open model picker)/);
+    await key('\t'); assert.match(frame(), /techne/);
     await key('\x1b[B'); await key('\t');
     assert.deepEqual(submissions, ['/login']);
-    await key('\r'); assert.deepEqual(submissions, ['/login', '/model qwen-test']);
+    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne']);
     await key('/pro'); await key('\x1b[B'); await key('\t');
     assert.match(frame(), /❯ deepseek/);
-    await key('\r'); assert.deepEqual(submissions, ['/login', '/model qwen-test'], '参数确认只补齐');
-    await key('\r'); assert.deepEqual(submissions, ['/login', '/model qwen-test', '/provider deepseek']);
+    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne'], '参数确认只补齐');
+    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne', '/provider deepseek']);
     await key('/l'); await key('\x1b');
-    assert.doesNotMatch(frame(), /登录并保存 API key/); assert.match(frame(), /❯ \/l/);
+    assert.doesNotMatch(frame(), /(?:登录并保存 API key|Log in and save)/); assert.match(frame(), /❯ \/l/);
     await key('\t'); await key('\r');
     assert.equal((await ticket.result).status, 'answered', '菜单关闭后 Tab 仍可聚焦审批');
     assert.match(frame(), /❯ \/l/, '审批后保留主草稿');
-    await key('o'); assert.match(frame(), /登录并保存 API key/, '编辑后重新联想');
+    await key('o'); assert.match(frame(), /(?:登录并保存 API key|Log in and save)/, '编辑后重新联想');
     await key('g'); await key('\x7f');
-    assert.match(frame(), /登录并保存 API key/, '回到曾经关闭的前缀也重新联想');
+    assert.match(frame(), /(?:登录并保存 API key|Log in and save)/, '回到曾经关闭的前缀也重新联想');
     output.columns = 32; output.rows = 12;
     await act(async () => output.emit('resize')); await flushRender(instance);
     assert.match(frame(), /❯ \/login/);

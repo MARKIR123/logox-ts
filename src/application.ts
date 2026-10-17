@@ -5,7 +5,7 @@ import {ProjectExtensions, observeTasks, observeExtra} from './extensions/runtim
 import {createHash, randomUUID} from 'node:crypto';
 import {homedir} from 'node:os';
 import {CommandSurfaces} from './commands/surfaces.js';
-import type {CommandTab} from './runtime/command-surface.js';
+import type {CommandTab, PickerItem} from './runtime/command-surface.js';
 import {commandHelp, type CommandContext} from './commands.js';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -15,9 +15,11 @@ import {ActorServices} from './actors/services.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
+import {groupModelsForProvider, resolveActualModel, type GroupedModel} from './config/model-grouping.js';
 import {UsageLedger, usageLines} from './context/usage.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase} from './kernel/agent.js';
+import {getScratchpadDir, ensureScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
 import {RuntimeStore} from './runtime/store.js';
@@ -78,6 +80,9 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   await systems.restore();
   try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : '状态栏配置无法读取，使用默认布局。', 'command_error');}
+  const scratchpad = getScratchpadDir(cwd, session);
+  void ensureScratchpadDir(cwd, session);
+  permissions.setScratchpadDir(scratchpad);
   const environment = new EnvironmentState();
   const directorReports = new Map<string, string>();
   let closed = false;
@@ -165,7 +170,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     await configureMeter(context.ownerId);
     const role = actorServices.definition(context);
     const base = await agentRequestBase(cwd, context.ownerId, [...actorServices.tools(context.ownerId), ...extensions.mcp.definitions()],
-      resources, {prompt: role.prompt, visibility: actorServices.skills(context)}, false);
+      resources, {prompt: role.prompt, visibility: actorServices.skills(context)}, false, scratchpad);
     const model = taskModels.selection(context), thinking = taskModels.thinking(context);
     const policy = actorServices.skills(context);
     const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join('；') || '无';
@@ -187,12 +192,13 @@ export async function createSessionApplication(options: SessionApplicationOption
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),
     iterations: config.kernel.max_iterations, retries: config.kernel.max_retries, readonlyConcurrency: config.permissions.readonly_concurrency,
-    supportsVision: registry.selection().kind === 'anthropic' || !registry.selection().model.toLowerCase().includes('deepseek'),
+    supportsVision: () => true,
     retryProvider: async (context, error) => {
       const recovery = await actorServices.recovery.next(context.rootActivityId ?? context.activityId, error, context.recovery);
       context.signal.throwIfAborted();
       if (recovery.exhausted) return false;
-      notice('网络中断，正在重试；已完成工具结果保留。\n' + error.message,
+      const attemptText = `(${recovery.attempt}/${config.kernel.max_retries})`;
+      notice(`[Network] Connection interrupted. Retrying ${attemptText}...`,
         'task_notice', context.ownerId, context.activityId);
       return true;
     },
@@ -247,69 +253,171 @@ export async function createSessionApplication(options: SessionApplicationOption
   const openThinking = () => {
     requireIdle();
     const thinking = registry.thinking();
-    void surfaces.openPicker({title: '思考档位', description: '只显示当前模型声明支持的档位；auto 使用服务默认值', current: thinking.effort},
+    void surfaces.openPicker({title: 'Thinking Effort', description: 'Available effort tiers for current model; auto uses provider default', current: thinking.effort},
       async () => ({items: thinking.levels.map(id => ({id, label: id}))}), async id => {
-        await saveEffort(effortSchema.parse(id)); return {message: '思考档位：' + id + '（已保存）'};
+        await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)'};
       });
   };
   let pageOwner = 'logox';
   const contextLines = (): string[] => {
     const identity = {sessionId: session, ownerId: pageOwner};
     const usage = contexts.status(identity), spent = contexts.meter(identity).spent;
-    let window = '未知，请配置模型 context_window';
-    try {window = String(taskModels.model(identity).window) + ' token';} catch {}
-    return ['模型窗口：' + window, ...(usage ? ['最近请求输入占用：约 ' + usage.input + ' token',
-      '整理触发水位：' + usage.high + ' token；目标：' + usage.low + ' token', '本次输出额度：' + usage.output + ' token'] : ['当前输入占用：尚未发起任务']),
-      '已记录的任务、汇总及审批输入 / 输出：' + spent.input + ' / ' + spent.output + ' token'];
+    let window = 'Unknown, configure model context_window';
+    try {window = String(taskModels.model(identity).window) + ' tokens';} catch {}
+    return ['Model context window: ' + window, ...(usage ? ['Latest request input: ~' + usage.input + ' tokens',
+      'Compaction threshold: ' + usage.high + ' tokens; target: ' + usage.low + ' tokens', 'Output limit: ' + usage.output + ' tokens'] : ['Current input: No tasks started']),
+      'Recorded task, summary & approval tokens (in/out): ' + spent.input + ' / ' + spent.output + ' tokens'];
   };
   const status = (ownerId: string) => stageStatus({sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config}, ownerId);
   const sessionUsageRecords = () => [...meteredOwners].flatMap(ownerId => contexts.meter({sessionId: session, ownerId}).usageRecords());
   const pageTabs = (): readonly CommandTab[] => [
-    {id: 'status', title: '状态', lines: ['会话：' + session + ' · 角色：' + pageOwner, '角色任务固定自己的模型；默认不可用时确认转用',
-      '提供商：' + status(pageOwner).model?.provider, '模型：' + (status(pageOwner).model?.model || '尚未选择'),
-      '思考档位：' + status(pageOwner).effort, '权限模式：' + permissions.mode, '运行状态：' + status(pageOwner).state,
-      '活动任务：' + store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length,
-      ...contextLines(), '资源来源：', ...resources.snapshot().guidelines.map(item => item.path),
-      '技能：' + resources.snapshot().skills.length + '；模板命令：' + resources.snapshot().commands.length,
-      ...resources.snapshot().issues.map(item => item.kind + '：' + item.path + ' · ' + item.reason),
-      ...extensions.mcp.status().map(item => 'MCP ' + item.name + '：' + item.state)]},
-    {id: 'config', title: '配置', lines: ['当前生效配置', '', '提供商：' + settings.provider, '模型：' + (settings.model || '尚未选择'),
-      '思考档位：' + registry.thinking().effort, '模型地址：' + settings.baseUrl, 'Temperature：' + config.provider.temperature, '最大输出 token：' + config.provider.max_tokens,
-      '请求超时：' + config.provider.timeout + ' 秒', '每轮循环上限：' + config.kernel.max_iterations,
-      '连接重试上限：' + config.kernel.max_retries, '', '用 /model、/provider 切换；其他配置修改 config.toml 后重启。']},
-    {id: 'usage', title: '用量', lines: ['会话：' + session + ' · 角色：' + pageOwner,
-      '会话所有角色合计：' + sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' token（含审批）',
-      ...usageLines(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config)]},
-    {id: 'statusbar', title: '状态栏', lines: ['Space 开关 · 左右调整顺序 · Enter 保存 · Esc 放弃'], toggles: statusbar.getSnapshot().modules},
-    {id: 'animations', title: '动效', lines: ['Space 开关 · Enter 保存 · Esc 放弃', '关闭后保留静态状态和耗时。'], toggles: [{id: 'motion', label: '运行指示与 Actor 呼吸动效', enabled: statusbar.getSnapshot().motion}]},
-    {id: 'permissions', title: '权限', color: permissionModes[permissions.mode].color, lines: ['模式：' + permissions.mode + ' · ' + permissionModes[permissions.mode].description, ...tools.permissionGuard({sessionId: session}).lines(), '只读并发：' + config.permissions.readonly_concurrency,
-      '会话累计审批：' + sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' token', '', ...permissions.snapshot().map(rule => rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern), '', '/permissions mode [default|auto|creative]', '/permissions add session|project allow|deny 工具 模式', '/permissions revoke ID', '路径支持 *、**、?；Shell 使用静态词元前缀。单次许可不学习规则。']},
+    {id: 'status', title: 'Status', lines: [
+      'Session: ' + session + ' · Role: ' + pageOwner,
+      '─────────────────────────────────────────────────────────────',
+      'Provider: ' + (status(pageOwner).model?.provider ?? 'None'),
+      'Model: ' + (status(pageOwner).model?.model || 'None selected'),
+      'Thinking effort: ' + status(pageOwner).effort,
+      'Permission mode: ' + permissions.mode,
+      'Execution state: ' + status(pageOwner).state,
+      'Active tasks: ' + store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length,
+      '',
+      '── Context & Tokens ──────────────────────────────────────────',
+      ...contextLines(),
+      '',
+      '── Resources & Environment ───────────────────────────────────',
+      'Resource origins:',
+      ...resources.snapshot().guidelines.map(item => '  • ' + item.path),
+      'Skills: ' + resources.snapshot().skills.length + ' · Template commands: ' + resources.snapshot().commands.length,
+      ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
+      ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
+    ]},
+    {id: 'config', title: 'Config', lines: [
+      'Effective Configuration',
+      '─────────────────────────────────────────────────────────────',
+      'Provider: ' + settings.provider,
+      'Model: ' + (settings.model || 'None selected'),
+      'Thinking effort: ' + registry.thinking().effort,
+      'Base URL: ' + settings.baseUrl,
+      '',
+      '── Execution Limits ──────────────────────────────────────────',
+      'Temperature: ' + config.provider.temperature,
+      'Max tokens: ' + config.provider.max_tokens,
+      'Request timeout: ' + config.provider.timeout + 's',
+      'Max loop iterations: ' + (config.kernel.max_iterations > 0 ? config.kernel.max_iterations : 'Unlimited (Claude Code mode)'),
+      'Max connection retries: ' + config.kernel.max_retries,
+      '',
+      '── Instructions ─────────────────────────────────────────────',
+      'Switch via /model or /provider; edit config.toml and restart to change other settings.',
+    ]},
+    {id: 'usage', title: 'Usage', lines: [
+      'Session: ' + session + ' · Role: ' + pageOwner,
+      '─────────────────────────────────────────────────────────────',
+      'Total across session roles: ' + sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)',
+      '',
+      '── Breakdown ────────────────────────────────────────────────',
+      ...usageLines(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
+    ]},
+    {id: 'statusbar', title: 'Statusbar', lines: ['Space Toggle · [ / ] Reorder · Enter Save · Esc Discard'], toggles: statusbar.getSnapshot().modules},
+    {id: 'animations', title: 'Animations', lines: ['Space Toggle · Enter Save · Esc Discard', 'When disabled, static state and elapsed time remain displayed.'], toggles: [{id: 'motion', label: 'Activity spinners and Actor pulse animations', enabled: statusbar.getSnapshot().motion}]},
+    {id: 'permissions', title: 'Permissions', color: permissionModes[permissions.mode].color,
+      lines: [
+        'Current mode: ' + permissions.mode + ' · ' + permissionModes[permissions.mode].description + ' (press Space or m to toggle mode)',
+        '─────────────────────────────────────────────────────────────',
+        ...tools.permissionGuard({sessionId: session}).lines(),
+        'Readonly concurrency: ' + config.permissions.readonly_concurrency,
+        'Cumulative approval tokens: ' + sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens',
+        '',
+        '── Active Rules ─────────────────────────────────────────────',
+        ...permissions.snapshot().map(rule => '  • ' + rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern),
+        '',
+        '── Guidance ─────────────────────────────────────────────────',
+        'Press Space or m in this tab to cycle through default / auto / creative modes.',
+        'Paths support *, **, ?; shell matches static token prefixes.',
+      ]},
     actorServices.management.tab(),
-    {id: 'commands', title: '命令', lines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + '：' + item.description), '', '@角色 后接任务：直接对话；/actors model 角色：设置默认模型',
-      'Ctrl+G：角色窗口 · Tab：补全/审批/卡片操作', 'Ctrl+C：复制；连续两次退出 · Esc：返回/停止 Logox · Actor 卡片：停止对应任务 · Ctrl+D：退出']},
+    {id: 'commands', title: 'Commands', lines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + ': ' + item.description), '', '@<role> <prompt>: Talk directly to actor; /actors model <role>: Set default model',
+      'Ctrl+G: Roles pane · Tab: Autocomplete / Approvals / Card focus', 'Ctrl+C: Copy / press twice to exit · Esc: Back / Interrupt · Actor card: Stop task · Ctrl+D: Exit']},
   ];
   const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') surfaces.updatePage(pageTabs());});
   const openModels = () => {
     requireIdle();
-    void surfaces.openPicker({title: '选择模型', description: '已登录提供商与已配置本地接口 · 可搜索模型或提供商', current: JSON.stringify([settings.provider, settings.model])},
+    const groupedMap = new Map<string, GroupedModel>();
+    const currentBase = (() => {
+      const match = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/.exec(settings.model);
+      return match ? match[1]! : settings.model;
+    })();
+    void surfaces.openPicker({
+      title: 'Select Model',
+      description: 'Model families grouped · Search models, use ← → to adjust thinking effort',
+      current: JSON.stringify([settings.provider, currentBase]),
+    },
       async signal => {
         const catalog = await registry.modelCatalog(AbortSignal.any([signal, commands.signal]));
-        for (const provider of new Set(catalog.models.map(item => item.provider))) modelCandidates.set(provider, catalog.models.filter(item => item.provider === provider).map(item => item.id));
-        return {items: catalog.models.map(item => ({id: JSON.stringify([item.provider, item.id]), label: item.id, description: item.provider})),
-          warning: catalog.issues.join(' · ') || (!catalog.models.length ? '没有可用模型；请先 /login 或配置本地接口' : '')};
-      }, async id => {
+        for (const provider of new Set(catalog.models.map(item => item.provider))) {
+          modelCandidates.set(provider, catalog.models.filter(item => item.provider === provider).map(item => item.id));
+        }
+        const items: PickerItem[] = [];
+        const providers = [...new Set(catalog.models.map(m => m.provider))];
+        for (const provider of providers) {
+          const providerModels = catalog.models.filter(m => m.provider === provider).map(m => m.id);
+          const currentForThisProvider = settings.provider === provider ? settings.model : '';
+          const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
+          for (const grouped of groupedList) {
+            groupedMap.set(grouped.id, grouped);
+            const currentThinkingEffort = registry.thinking().effort;
+            const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
+              ? currentThinkingEffort
+              : grouped.currentEffort;
+            items.push({
+              id: grouped.id,
+              label: grouped.baseModel,
+              description: grouped.provider,
+              effort: currentEffort,
+              effortLevels: grouped.effortLevels.length > 1 ? grouped.effortLevels : undefined,
+            });
+          }
+        }
+        return {
+          items,
+          warning: catalog.issues.join(' · ') || (!items.length ? 'No models available. Run /login or configure a local provider.' : ''),
+        };
+      },
+      async (id, chosenEffort) => {
         requireIdle();
-        const [provider, model] = z.tuple([z.string(), z.string()]).parse(JSON.parse(id));
-        await saveSelection(registry.candidate(provider, model));
-        return {message: '当前模型：' + provider + ' / ' + model};
+        const grouped = groupedMap.get(id);
+        let provider: string;
+        let actualModel: string;
+        let effort: string | undefined;
+
+        if (grouped) {
+          provider = grouped.provider;
+          const resolved = resolveActualModel(grouped, chosenEffort);
+          actualModel = resolved.modelId;
+          effort = resolved.effort;
+        } else {
+          const parsed = z.tuple([z.string(), z.string()]).parse(JSON.parse(id));
+          provider = parsed[0];
+          actualModel = parsed[1];
+          effort = chosenEffort;
+        }
+
+        const candidate = registry.candidate(provider, actualModel);
+        if (effort) {
+          const parsedEffort = effortSchema.safeParse(effort);
+          if (parsedEffort.success) {
+            try { candidate.selectEffort(parsedEffort.data); } catch {}
+          }
+        }
+        await saveSelection(candidate);
+        return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : '')};
       });
   };
   const openProviders = () => {
     requireIdle();
-    void surfaces.openPicker({title: '选择提供商', description: '切换后使用该提供商的默认模型；/model 查看已登录模型', current: settings.provider},
+    void surfaces.openPicker({title: 'Select Provider', description: 'Switch default provider; run /model to inspect available models', current: settings.provider},
       async () => ({items: registry.names().map(name => ({id: name, label: name}))}), async name => {
         await saveSelection(registry.candidate(name));
-        return {message: '当前提供商：' + name + '\n模型：' + (settings.model || '使用 /model 选择')};
+        return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
       });
   };
   // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
@@ -368,14 +476,14 @@ export async function createSessionApplication(options: SessionApplicationOption
     store.message(session, task.ownerId, 'user', task.prompt, {activityId: task.activityId, source: task.source,
       inputKind: inputKind(task), time: task.time});
   }
-  systems.emit('会话 ' + session + '\n' + (settings.model ? settings.model : '尚未设置模型，使用 /model 模型名') + ' · /help 查看操作', 'task_notice', 'logox', undefined, false);
-  for (const issue of resources.snapshot().issues) notice('资源未加载：' + issue.path + ' · ' + issue.reason);
+  systems.emit('Session ' + session + '\n' + (settings.model ? settings.model : 'No model set, use /model <name>') + ' · Run /help for assistance', 'task_notice', 'logox', undefined, false);
+  for (const issue of resources.snapshot().issues) notice('Resource failed to load: ' + issue.path + ' · ' + issue.reason);
   const terminal = new Set(checkpoints.filter(task => ['failed', 'cancelled'].includes(task.status)).map(task => task.activityId));
   const stopSystemUpdates = store.subscribe(() => {
     for (const activity of store.getSnapshot().activities) {
       if (!['failed', 'cancelled'].includes(activity.status) || terminal.has(activity.activityId)) continue;
       terminal.add(activity.activityId);
-      notice(activity.status === 'failed' ? '执行失败：' + activity.detail : '任务已停止。',
+      notice(activity.status === 'failed' ? 'Execution failed: ' + activity.detail : 'Task stopped.',
         activity.status === 'failed' ? 'model_error' : 'task_notice', activity.ownerId, activity.activityId);
     }
   });
@@ -403,8 +511,15 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     activate() {extensions.hooks.emit('session_start', {session_id: session, model: settings.model});},
     commandContext(): CommandContext {
+      const knownPresets: Record<string, string[]> = {
+        antigravity: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'gemini-3.7-flash', 'claude-opus-4-6', 'gemini-3.1-pro-high', 'gpt-oss-120b-medium'],
+        deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
+        anthropic: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'],
+      };
+      const providerModels = modelCandidates.get(settings.provider) ?? knownPresets[settings.provider] ?? [];
       return {providers: registry.names(), loginProviders: registry.loginNames(), customCommands: resources.snapshot().commands,
-        models: [...new Set([settings.model, ...modelCandidates.get(settings.provider) ?? [],
+        actors: actors.list().map(actor => actor.id),
+        models: [...new Set([settings.model, ...providerModels,
           ...[...modelCandidates].flatMap(([provider, models]) => models.map(model => provider + '/' + model))].filter(Boolean))]};
     },
     noteDraft() {},
@@ -422,33 +537,33 @@ export async function createSessionApplication(options: SessionApplicationOption
     async submit(raw: string, source = 'logox'): Promise<void> {
       const text = raw.trim();
       if (!text || closed) return;
-      if (permissionTask) throw new Error('权限正在保存，请等待完成');
-      if (selecting) throw new Error('模型设置正在保存，请稍后重试');
-      if (reloadTask) throw new Error('资源正在重载，请等待完成');
-      if (compactTask) throw new Error('上下文正在整理，请先等待或取消扬弃');
-      if (surfaces.getSnapshot()) throw new Error('请先关闭当前命令界面');
-      if (authentication.getSnapshot()) throw new Error('登录正在进行，请先完成或取消');
+      if (permissionTask) throw new Error('Permissions are saving, please wait...');
+      if (selecting) throw new Error('Model settings are saving, please try again shortly...');
+      if (reloadTask) throw new Error('Resources are reloading, please wait...');
+      if (compactTask) throw new Error('Context is compacting, please wait or cancel...');
+      if (surfaces.getSnapshot()) throw new Error('Please close the current command pane first');
+      if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
       commandOwner = source;
       if (/^\/(new|resume|clear|rewind)(?:\s|$)/.test(text) && await options.sessionCommand(text)) return;
       if (text === '/login' || text.startsWith('/login ')) {
-        if (ensemble.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再登录');
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');
         await authentication.begin(text === '/login' ? undefined : text.slice(7).trim()); return;
       }
       if (text === '/permissions mode') {
-        void surfaces.openPicker({title: '权限模式', description: '三档共用显式 deny；切换后待执行操作重新裁决', current: permissions.mode},
+        void surfaces.openPicker({title: 'Permission Mode', description: 'Explicit deny is shared across all 3 tiers; pending actions will be re-evaluated', current: permissions.mode},
           async () => ({items: Object.entries(permissionModes).map(([id, mode]) => ({id, label: id, description: mode.description, color: mode.color}))}),
-          async id => {await permissions.setMode(permissionModeSchema.parse(id)); return {message: '权限模式：' + id};});
+          async id => {await permissions.setMode(permissionModeSchema.parse(id)); return {message: 'Permission mode: ' + id};});
         return;
       }
       if (text.startsWith('/permissions ')) {
         if (!text.startsWith('/permissions mode ')) requireIdle();
         permissionTask = (async () => {
           const parts = text.slice(13).trim().split(/\s+/);
-          if (parts[0] === 'mode') {if (parts.length !== 2) throw new Error('用法：/permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
+          if (parts[0] === 'mode') {if (parts.length !== 2) throw new Error('Usage: /permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
           else if (parts[0] === 'revoke' && parts.length === 2) await permissions.revoke(parts[1]!);
           else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: z.enum(['session', 'project']).parse(parts[1]), decision: z.enum(['allow', 'deny']).parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')});
-          else throw new Error('使用 /permissions 查看用法');
-          notice('权限已更新。');
+          else throw new Error('Run /permissions to view usage');
+          notice('Permissions updated.');
         })();
         try {await permissionTask;} finally {permissionTask = undefined;}
         return;
@@ -456,13 +571,63 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (text.startsWith('/actors model ')) {
         requireIdle(); await actorServices.management.openDefaultModel(text.slice(14).trim(), surfaces); return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors'].includes(text)) {
-        pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), ['/help', '/commands'].includes(text) ? 'commands' : text.slice(1), {
-          onSaveToggles: async (tabId, items) => {if (tabId === 'animations') {await statusbar.saveMotion(items[0]?.enabled ?? true); return {message: '动效设置已保存。'};} if (tabId !== 'statusbar') throw new Error('此页面不支持设置'); await statusbar.save(items); return {message: '状态栏布局已保存。'};},
+      if (text.startsWith('/model ') || text === '/model') {
+        const rawArg = text === '/model' ? '' : text.slice(7).trim();
+        const firstToken = rawArg.split(/\s+/)[0]?.toLowerCase();
+        const targetActor = firstToken ? actors.find(firstToken) : undefined;
+
+        if (text === '/model') {
+          if (source !== 'logox' && actors.find(source)) {
+            requireIdle();
+            await actorServices.management.openDefaultModel(source, surfaces);
+            return;
+          }
+          openModels();
+          return;
+        }
+
+        if (targetActor) {
+          requireIdle();
+          if (targetActor.id === 'logox') {
+            openModels();
+            return;
+          }
+          await actorServices.management.openDefaultModel(targetActor.id, surfaces);
+          return;
+        }
+
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching model.');
+        const model = rawArg;
+        if (!model) throw new Error('Please specify a model name');
+        const provider = registry.names().filter(name => model.startsWith(name + '/')).sort((a, b) => b.length - a.length)[0];
+        await saveSelection(registry.candidate(provider ?? settings.provider, provider ? model.slice(provider.length + 1) : model));
+        notice('Current model: ' + model);
+        return;
+      }
+      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble'].includes(text)) {
+        pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : text.slice(1), {
+          onSaveToggles: async (tabId, items) => {
+            if (tabId === 'animations') {
+              await statusbar.saveMotion(items[0]?.enabled ?? true);
+              return {message: 'Animation settings saved.'};
+            }
+            if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
+            await statusbar.save(items);
+            return {message: 'Statusbar layout saved.'};
+          },
+          onTabAction: async (tabId, action) => {
+            if (tabId === 'permissions' && action === 'toggle_mode') {
+              const modes = ['default', 'auto', 'creative'] as const;
+              const nextMode = modes[(modes.indexOf(permissions.mode) + 1) % modes.length]!;
+              await permissions.setMode(nextMode);
+              return {message: 'Permission mode switched to: ' + nextMode};
+            }
+            return {};
+          },
         }); return;
       }
       if (text === '/skills') {
-        notice(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + '：' + item.description + '\n' + item.path).join('\n\n') || '没有发现技能'); return;
+        notice(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + ': ' + item.description + '\n' + item.path).join('\n\n') || 'No skills found'); return;
       }
       if (text === '/reload') {
         requireIdle();
@@ -471,7 +636,7 @@ export async function createSessionApplication(options: SessionApplicationOption
             options.resourceOptions?.home, options.resourceOptions?.boundary));
           if (report.prefixChanged) contexts.invalidatePrefix();
           const actorState = await actors.reload(); contexts.invalidatePrefix();
-          for (const issue of actorState.issues) notice('角色未加载：' + issue.path + ' · ' + issue.reason);
+          for (const issue of actorState.issues) notice('Actor failed to load: ' + issue.path + ' · ' + issue.reason);
           if (!closed) notice(report.text);
         })();
         try {await reloadTask;} finally {reloadTask = undefined;}
@@ -481,56 +646,54 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (effortCommand) {
         if (!effortCommand[1]) {openThinking(); return;}
         const effort = effortSchema.safeParse(effortCommand[1]);
-        if (!effort.success) throw new Error('思考档位：auto/off/low/medium/high/max；支持情况见 /effort');
-        await saveEffort(effort.data); notice('思考档位：' + effort.data + '（已保存）'); return;
+        if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
+        await saveEffort(effort.data); notice('Thinking effort: ' + effort.data + ' (saved)'); return;
       }
       if (text === '/providers' || text === '/provider') {openProviders(); return;}
       if (text === '/model') {openModels(); return;}
-      if (text.startsWith('/provider ')) {
-        if (ensemble.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再切换提供商');
-        const parts = text.slice(10).trim().split(/\s+/);
-        if (!parts[0] || parts.length > 2) throw new Error('用法：/provider 名称 [模型]');
-        await saveSelection(registry.candidate(parts[0], parts[1]));
-        notice('当前提供商：' + settings.provider + '\n模型：' + (settings.model || '使用 /models 查询，再用 /model 名称选择')); return;
-      }
-      if (text.startsWith('/model ')) {
-        if (ensemble.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再切换模型');
-        const model = text.slice(7).trim();
-        if (!model) throw new Error('请输入模型名称');
-        const provider = registry.names().filter(name => model.startsWith(name + '/')).sort((a, b) => b.length - a.length)[0];
-        await saveSelection(registry.candidate(provider ?? settings.provider, provider ? model.slice(provider.length + 1) : model));
-        notice('当前模型：' + model); return;
-      }
       if (text === '/models') {
         const provider = settings.provider;
         const models = await registry.models(AbortSignal.any([commands.signal, AbortSignal.timeout(15000)]));
         modelCandidates.set(provider, models);
-        notice(models.join('\n') || '接口返回空模型列表'); return;
+        notice(models.join('\n') || 'Provider returned empty model list'); return;
       }
       if (text === '/check-provider') {
-        if (ensemble.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再检查提供商');
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
         const selection = registry.selection();
         const result = await registry.check(commands.signal);
-        notice('提供商检查成功：' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\n耗时：' + result.elapsedMs + ' ms'); return;
+        notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+      }
+      if (text.startsWith('/provider ')) {
+        const parts = text.slice(10).trim().split(/\s+/);
+        if (parts[0] === 'check') {
+          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
+          const selection = registry.selection();
+          const result = await registry.check(commands.signal);
+          notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+        }
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
+        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model], or /provider check');
+        await saveSelection(registry.candidate(parts[0], parts[1]));
+        notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
       }
       if (text === '/compact') {
         requireIdle();
         const activityId = randomUUID(), controller = new AbortController();
         store.activities.create({sessionId: session, activityId, ownerId: source, kind: source === 'logox' ? 'director' : 'actor',
-          title: '扬弃', status: 'running', stage: '整理上下文', detail: '原始账本保留，不执行工具'});
+          title: 'Compact', status: 'running', stage: 'Compacting context', detail: 'Preserving raw journal without executing tools'});
         const operation = (async () => {
           try {
             const role = actors.find(source);
             const identity = {sessionId: session, ownerId: source, activityId};
             const base = await agentRequestBase(cwd, source, actorServices.tools(source), resources,
-              role ? {prompt: role.prompt, visibility: {actorId: source, skills: role.skills}} : undefined, false);
+              role ? {prompt: role.prompt, visibility: {actorId: source, skills: role.skills}} : undefined, false, scratchpad);
             await contexts.prepare(identity, contexts.requestBase(identity, base), controller.signal, true);
             controller.signal.throwIfAborted();
-            store.activities.update(session, activityId, {status: 'completed', stage: '整理完成'});
+            store.activities.update(session, activityId, {status: 'completed', stage: 'Compacted'});
           } catch (error) {
             store.activities.update(session, activityId, {status: controller.signal.aborted ? 'cancelled' : 'failed',
-              stage: controller.signal.aborted ? '已中断' : '整理失败', detail: error instanceof Error ? error.message : String(error)});
-            notice(controller.signal.aborted ? '扬弃已取消，原始记录保留。' : '扬弃未完成：' + (error instanceof Error ? error.message : String(error)), 'command_error', source, activityId);
+              stage: controller.signal.aborted ? 'Aborted' : 'Compaction failed', detail: error instanceof Error ? error.message : String(error)});
+            notice(controller.signal.aborted ? 'Compaction cancelled. Raw records preserved.' : 'Compaction failed: ' + (error instanceof Error ? error.message : String(error)), 'command_error', source, activityId);
           } finally {compactTask = undefined;}
         })();
         compactTask = {activityId, controller, done: operation};
@@ -538,22 +701,22 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (text === '/undo') {
-        if (ensemble.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再撤销');
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before undoing.');
         const activities = new Set((await journal.activeTasks(session)).map(task => task.activityId));
         for (const owner of owners) for (const entry of await journal.load(session, owner)) if (entry.activityId) activities.add(entry.activityId);
         const paths = await tools.snapshots.undo([...activities]);
-        notice(paths.length ? '已撤销：\n' + paths.join('\n') : '没有可撤销的文件修改'); return;
+        notice(paths.length ? 'Undone:\n' + paths.join('\n') : 'No file changes to undo'); return;
       }
       if (text.startsWith('/cast ')) {
         const prompt = text.slice(6).trim();
-        if (!prompt) throw new Error('请输入角色任务');
+        if (!prompt) throw new Error('Please specify a task prompt for actors');
         await beginTask();
         ensemble.dispatchBatch((['aletheia', 'techne', 'kalon'] as const).map(ownerId => ({ownerId, prompt}))); return;
       }
       if (text.startsWith('/')) {
         const match = /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i.exec(text);
         const expanded = match ? resources.expand(match[1]!, match[2] ?? '') : undefined;
-        if (!expanded) throw new Error('未知命令，使用 /help 查看已实现的命令');
+        if (!expanded) throw new Error('Unknown command. Run /help to view available commands.');
         await beginTask();
         await dispatchInput(source, expanded, source === 'logox' ? source : 'direct'); return;
       }

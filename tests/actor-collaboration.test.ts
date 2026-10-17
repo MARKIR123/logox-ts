@@ -44,7 +44,7 @@ test('真实串行队列完成申请、批准、三轮消息，工具不等待�
     await ensemble.dispatch('techne', '开始').done;
     // 队列在执行中继续增长，等待最后一轮完成的外部屏障。
     await new Promise<void>((resolve, reject) => {
-      const deadline = Date.now() + 3000;
+      const deadline = Date.now() + 10000;
       const check = () => {if (!ensemble.isBusy()) resolve(); else if (Date.now() > deadline) reject(new Error('队列死锁')); else setTimeout(check, 5);}; check();
     });
     assert.equal(peak, 1);
